@@ -1,0 +1,86 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "agentic-autoscaler.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentic-autoscaler.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "agentic-autoscaler.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Allow Prometheus to scrape operator metrics.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.metrics.port }}
+
+  egress:
+    # Kubernetes API server — required for all controller-runtime operations.
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+
+    # Prometheus — signal collection (MetricSnapshot).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.prometheusPort }}
+
+    # Loki — log collection (LogEntry stream).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.lokiNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.lokiPort }}
+
+    # Cloud AI API (Anthropic / OpenAI) — HTTPS egress to internet.
+    {{- if not (eq .Values.aiProvider.provider "ollama") }}
+    - ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
+
+    # Ollama in-cluster inference — only when self-hosted backend is active.
+    {{- if .Values.ollama.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.ollama.namespace }}
+      ports:
+        - protocol: TCP
+          port: 11434
+    {{- end }}
+
+    # Grafana annotations — only when a Grafana URL is configured.
+    {{- if .Values.grafana.url }}
+    - ports:
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 443
+    {{- end }}
+
+    # DNS resolution (CoreDNS / kube-dns).
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}

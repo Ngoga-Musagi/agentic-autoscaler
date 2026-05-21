@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "agentic-autoscaler.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentic-autoscaler.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "agentic-autoscaler.fullname" . }}
+  labels:
+    {{- include "agentic-autoscaler.labels" . | nindent 4 }}
+rules:
+  # Manage AgenticAutoscaler CRs and their status subresource.
+  - apiGroups: ["scaling.autoscaler.io"]
+    resources: ["agenticautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["scaling.autoscaler.io"]
+    resources: ["agenticautoscalers/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["scaling.autoscaler.io"]
+    resources: ["agenticautoscalers/finalizers"]
+    verbs: ["update"]
+
+  # Read and patch target Deployments (replica count only — no delete).
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+
+  # Read HPA bounds in calibrated coexistence mode (never modify).
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+
+  # KEDA ScaledObject integration (optional, harmless when KEDA is absent).
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # ConfigMap audit log written by pkg/observability.ConfigMapRecorder.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # Leader-election (controller-runtime uses a Lease or ConfigMap).
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Emit Kubernetes events for important reconcile actions.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "agentic-autoscaler.fullname" . }}
+  labels:
+    {{- include "agentic-autoscaler.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "agentic-autoscaler.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agentic-autoscaler.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

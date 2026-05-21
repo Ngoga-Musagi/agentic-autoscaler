@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ollama
+description: Self-hosted Ollama inference server for the agentic-autoscaler operator.
+type: application
+version: 0.1.0
+appVersion: "0.1.44"

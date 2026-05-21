@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentic-autoscaler.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentic-autoscaler.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentic-autoscaler.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentic-autoscaler.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Restart the operator when the AI key secret changes.
+        checksum/secret-ai: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "agentic-autoscaler.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: manager
+          image: {{ include "agentic-autoscaler.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/manager"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+          env:
+            # ---- AI provider ------------------------------------------------
+            - name: AI_PROVIDER
+              value: {{ .Values.aiProvider.provider | quote }}
+            {{- if not (eq .Values.aiProvider.provider "ollama") }}
+            - name: {{ if eq .Values.aiProvider.provider "openai" }}OPENAI_API_KEY{{ else }}ANTHROPIC_API_KEY{{ end }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.aiProvider.secretRef }}
+                  key: API_KEY
+            {{- end }}
+            {{- if and (eq .Values.aiProvider.provider "anthropic") .Values.aiProvider.model }}
+            - name: ANTHROPIC_MODEL
+              value: {{ .Values.aiProvider.model | quote }}
+            {{- end }}
+            {{- if and (eq .Values.aiProvider.provider "openai") .Values.aiProvider.model }}
+            - name: OPENAI_MODEL
+              value: {{ .Values.aiProvider.model | quote }}
+            {{- end }}
+            {{- if eq .Values.aiProvider.provider "ollama" }}
+            - name: OLLAMA_BASE_URL
+              value: {{ printf "http://ollama.%s.svc.cluster.local:11434" .Values.ollama.namespace | quote }}
+            - name: OLLAMA_MODEL
+              value: {{ .Values.ollama.model | quote }}
+            {{- end }}
+            # ---- Grafana ----------------------------------------------------
+            {{- if .Values.grafana.url }}
+            - name: GRAFANA_URL
+              value: {{ .Values.grafana.url | quote }}
+            - name: GRAFANA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.grafana.secretRef }}
+                  key: GRAFANA_TOKEN
+            {{- end }}
+            # ---- Extra env overrides ----------------------------------------
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

@@ -1,0 +1,23 @@
+apiVersion: v2
+name: agentic-autoscaler
+description: >
+  Kubernetes operator that fuses Prometheus metrics with log stream intelligence
+  and AI reasoning to make proactive, explainable scaling decisions.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - autoscaler
+  - kubernetes
+  - ai
+  - scaling
+  - observability
+home: https://github.com/Ngoga-Musagi/agentic-autoscaler
+maintainers:
+  - name: Ngoga Musagi
+    email: alexis.ngoga@rwandair.com
+dependencies:
+  - name: ollama
+    version: "0.1.0"
+    repository: "file://./charts/ollama"
+    condition: ollama.enabled

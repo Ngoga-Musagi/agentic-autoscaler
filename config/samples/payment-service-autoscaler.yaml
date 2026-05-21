@@ -1,0 +1,56 @@
+# Example: Opt a single deployment into agentic autoscaling
+#
+# This CR is the ONLY thing needed to enable agentic autoscaling for a deployment.
+# The Deployment itself does NOT need to be modified.
+# Drop this file alongside your existing deployment.yaml and hpa.yaml in your GitOps repo.
+#
+# Recommended rollout order:
+#   1. Set dryRun: true — operator logs decisions, does not execute
+#   2. Review decision log in Grafana for 1 week
+#   3. Set hpaCoexistence.mode: calibrated — live scaling, HPA remains as safety net
+#   4. After 2+ weeks validated: set hpaCoexistence.mode: owner, delete the HPA
+
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: payment-service-autoscaler
+  namespace: production
+  labels:
+    app.kubernetes.io/managed-by: agentic-autoscaler
+spec:
+  # ─── Target ───────────────────────────────────────────────────────────
+  targetDeployment: payment-service   # Only THIS deployment is managed
+  # namespace defaults to metadata.namespace
+
+  # ─── Signal sources ───────────────────────────────────────────────────
+  prometheusURL: "http://prometheus-operated.monitoring:9090"
+
+  logSource:
+    type: loki                         # "loki" or "kafka"
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{namespace="production", app="payment-service"}'
+
+  # ─── Scaling bounds ───────────────────────────────────────────────────
+  minReplicas: 3
+  maxReplicas: 15
+  cooldownSeconds: 180               # 3 minutes between scale actions
+
+  # ─── Safety — always start dry-run ────────────────────────────────────
+  dryRun: true                       # set false once decision log looks correct
+
+  # ─── AI provider ──────────────────────────────────────────────────────
+  aiProvider:
+    provider: anthropic               # "anthropic" | "openai" | "ollama"
+    secretRef: "ai-provider-secret"  # K8s Secret with ANTHROPIC_API_KEY
+
+  # ─── HPA coexistence ──────────────────────────────────────────────────
+  hpaCoexistence:
+    mode: calibrated                  # "calibrated" | "owner"
+    hpaName: payment-service-hpa      # existing HPA to read bounds from
+    hpaNamespace: production
+
+  # ─── Observability ────────────────────────────────────────────────────
+  observability:
+    grafanaURL: "http://grafana.monitoring:3000"
+    secretRef: "grafana-api-secret"  # K8s Secret with GRAFANA_API_KEY

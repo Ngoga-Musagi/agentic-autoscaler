@@ -1,0 +1,29 @@
+name: Weekly — code quality sweep
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"  # Monday 08:00 UTC
+  workflow_dispatch:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: claude-sonnet-4-20250514
+          prompt: |
+            Run a code quality sweep on the agentic-autoscaler project.
+            1. Run `go vet ./...` and fix any issues found
+            2. Run `golangci-lint run ./...` — fix warnings in pkg/ packages
+            3. Check that all exported functions have godoc comments
+            4. Check that error returns in pkg/policy/ are all wrapped with %w
+            5. Create a PR with any fixes found. Title: "chore: weekly quality sweep"

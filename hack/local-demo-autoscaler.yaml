@@ -1,0 +1,28 @@
+# Local-demo AgenticAutoscaler for the "Full local walkthrough" in README.md.
+# Targets the payment-service Deployment and reads signals from the mock
+# Prometheus+Loki server (hack/mockserver) on localhost:9099. NOT for production.
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: payment-service-autoscaler
+  namespace: default
+spec:
+  targetDeployment: payment-service
+  namespace: default              # explicit: the scaler reads spec.namespace directly
+  prometheusURL: "http://localhost:9099"
+  logSource:
+    type: loki
+    loki:
+      url: "http://localhost:9099"
+      query: '{app="payment-service"}'
+  minReplicas: 2
+  maxReplicas: 20
+  cooldownSeconds: 30
+  dryRun: false                   # live scaling for the demo — start TRUE in production
+  aiProvider:
+    provider: anthropic           # provider is actually chosen by the operator's AI_PROVIDER env
+  hpaCoexistence:
+    mode: owner                   # sole controller; no HPA needed
+  observability:
+    grafanaURL: "http://localhost:3000"
+    secretRef: "none"

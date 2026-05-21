@@ -1,0 +1,60 @@
+{
+  "operator-patterns": {
+    "description": "kubebuilder operator scaffold, reconcile loop, CRD types, controller-runtime",
+    "priority": 9,
+    "triggers": {
+      "keywords": ["reconcile", "operator", "controller", "crd", "kubebuilder", "manager", "finalizer"],
+      "keywordPatterns": ["\\bcrd\\b", "\\breconcil\\w+\\b", "AgenticAutoscaler"],
+      "pathPatterns": ["api/v1alpha1/**", "internal/controller/**", "cmd/main.go"],
+      "intentPatterns": ["create.*operator", "write.*reconcil", "define.*crd", "scaffold.*project"]
+    }
+  },
+  "signal-fusion": {
+    "description": "Prometheus queries, Loki log reading, Kafka consumer, SystemSnapshot, FusedSignal, pattern matching",
+    "priority": 8,
+    "triggers": {
+      "keywords": ["prometheus", "metric", "log", "signal", "snapshot", "loki", "kafka", "fluentd", "correlat"],
+      "pathPatterns": ["pkg/signals/**", "pkg/fusion/**"],
+      "intentPatterns": ["collect.*metric", "read.*log", "fuse.*signal", "correlat.*pattern"]
+    }
+  },
+  "ai-reasoning": {
+    "description": "AI agent, LLM reasoning, ScaleDecision, rule-based agent, Anthropic SDK, OpenAI SDK, Ollama self-hosted",
+    "priority": 9,
+    "triggers": {
+      "keywords": ["reason", "agent", "llm", "decision", "anthropic", "openai", "ollama", "prompt", "inference"],
+      "keywordPatterns": ["ScaleDecision", "reasoning\\.Agent", "RuleBasedAgent", "AIAgent"],
+      "pathPatterns": ["pkg/reasoning/**"],
+      "intentPatterns": ["switch.*provider", "add.*ollama", "change.*model", "build.*agent"]
+    }
+  },
+  "hpa-integration": {
+    "description": "HPA coexistence, cooldown, min/max bounds, conflict avoidance, HPA annotation, opt-in per deployment",
+    "priority": 9,
+    "triggers": {
+      "keywords": ["hpa", "horizontal", "cooldown", "bound", "conflict", "coexist", "overlap", "opt-in"],
+      "keywordPatterns": ["minReplicas", "maxReplicas", "HorizontalPodAutoscaler", "cooldownSeconds"],
+      "pathPatterns": ["pkg/policy/**"],
+      "intentPatterns": ["disable.*hpa", "calibrat.*hpa", "avoid.*conflict", "bound.*replica"]
+    }
+  },
+  "kubernetes-api": {
+    "description": "client-go, patch deployment replicas, KEDA ScaledObject, status update, RBAC, watch events",
+    "priority": 7,
+    "triggers": {
+      "keywords": ["client-go", "patch", "replica", "keda", "scaledobject", "rbac", "watch", "informer"],
+      "keywordPatterns": ["client\\.Patch", "ScaledObject", "spec\\.replicas"],
+      "pathPatterns": ["pkg/scaler/**", "config/rbac/**"],
+      "intentPatterns": ["patch.*deploy", "scale.*deployment", "create.*keda", "update.*status"]
+    }
+  },
+  "observability": {
+    "description": "Grafana annotations, decision audit log, explainability, Prometheus metrics exposition, dashboard",
+    "priority": 6,
+    "triggers": {
+      "keywords": ["grafana", "annotation", "audit", "explain", "dashboard", "observ", "decision.log"],
+      "pathPatterns": ["pkg/observability/**"],
+      "intentPatterns": ["push.*annotation", "log.*decision", "explain.*scale", "audit.*trail"]
+    }
+  }
+}

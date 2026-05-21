@@ -1,0 +1,29 @@
+name: Scheduled — docs sync (monthly)
+
+on:
+  schedule:
+    - cron: '0 9 1 * *'   # 1st of every month at 09:00 UTC
+  workflow_dispatch:
+
+jobs:
+  docs-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: claude-sonnet-4-20250514
+          prompt: |
+            Read the git log for the last 30 days: `git log --oneline --since="30 days ago"`.
+            Review all markdown files in .claude/skills/ and CLAUDE.md.
+            Check if:
+            1. SKILL.md files still accurately describe the current code patterns
+            2. Code examples in skills match the actual Go types in api/v1alpha1/ and pkg/
+            3. CLAUDE.md quick-facts and key-directories are still accurate
+            Update any stale content and open a PR with the changes.
+            PR title format: "docs: monthly skills sync <YYYY-MM>"

@@ -1,0 +1,43 @@
+# -- Enable the Ollama sub-chart. Set to true in the parent chart via
+# ollama.enabled=true. Controlled here so the sub-chart can also be
+# deployed standalone with helm install ./charts/ollama.
+enabled: false
+
+image:
+  repository: ollama/ollama
+  tag: "0.1.44"
+  pullPolicy: IfNotPresent
+
+# -- Model to pull on first startup (e.g. "llama3:8b", "mistral:7b").
+model: "llama3:8b"
+
+# -- Namespace the Ollama Deployment is created in.
+# Must exist before installing; not created by this chart.
+namespace: "ollama"
+
+service:
+  port: 11434
+
+resources:
+  requests:
+    cpu: "2"
+    memory: "12Gi"
+  limits:
+    cpu: "4"
+    memory: "16Gi"
+
+# -- Node selector for the GPU / high-memory dedicated node pool.
+nodeSelector: {}
+
+# -- Tolerate the ollama=true:NoSchedule taint on dedicated Ollama nodes.
+tolerations:
+  - key: "ollama"
+    operator: "Equal"
+    value: "true"
+    effect: "NoSchedule"
+
+persistence:
+  # -- Persist downloaded model weights across Pod restarts.
+  enabled: true
+  size: "40Gi"
+  storageClass: ""

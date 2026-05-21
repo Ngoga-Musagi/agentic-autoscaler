@@ -1,0 +1,32 @@
+# Build output
+bin/
+dist/
+
+# Go
+*.test
+*.out
+vendor/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*_credentials*
+
+# Claude local overrides
+.claude/settings.local.json
+.claude/CLAUDE.local.md
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Kind / kubeconfig
+kubeconfig
+*.kubeconfig
+
+# Test coverage
+coverage.out
+coverage.html

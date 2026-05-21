@@ -1,0 +1,29 @@
+name: Biweekly — dependency audit
+
+on:
+  schedule:
+    - cron: "0 9 1,15 * *"  # 1st and 15th of month
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: claude-sonnet-4-20250514
+          prompt: |
+            Audit and update dependencies in the agentic-autoscaler project.
+            1. Run `go list -m -u all` to find outdated modules
+            2. Update controller-runtime, client-go, and api modules together (they must be version-aligned)
+            3. Run `go test ./...` after updates — only proceed if tests pass
+            4. Do NOT update k8s.io/* modules independently — they must all move together
+            5. Create a PR with updates. Title: "chore(deps): biweekly dependency audit"

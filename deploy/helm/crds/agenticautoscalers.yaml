@@ -1,0 +1,250 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+  name: agenticautoscalers.scaling.autoscaler.io
+spec:
+  group: scaling.autoscaler.io
+  names:
+    kind: AgenticAutoscaler
+    listKind: AgenticAutoscalerList
+    plural: agenticautoscalers
+    singular: agenticautoscaler
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.targetDeployment
+      name: Target
+      type: string
+    - jsonPath: .spec.minReplicas
+      name: Min
+      type: integer
+    - jsonPath: .spec.maxReplicas
+      name: Max
+      type: integer
+    - jsonPath: .status.currentReplicas
+      name: Current
+      type: integer
+    - jsonPath: .spec.dryRun
+      name: DryRun
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: AgenticAutoscaler is the Schema for the agenticautoscalers API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: AgenticAutoscalerSpec defines the desired state of AgenticAutoscaler.
+            properties:
+              aiProvider:
+                description: AIProvider configures the AI reasoning backend.
+                properties:
+                  provider:
+                    description: 'Provider is the AI backend: "anthropic", "openai",
+                      or "ollama".'
+                    enum:
+                    - anthropic
+                    - openai
+                    - ollama
+                    type: string
+                  secretRef:
+                    description: |-
+                      SecretRef is the name of the Kubernetes Secret holding the API key.
+                      Not required when Provider is "ollama".
+                    type: string
+                required:
+                - provider
+                type: object
+              cooldownSeconds:
+                description: CooldownSeconds is the minimum number of seconds between
+                  consecutive scale actions.
+                format: int32
+                minimum: 0
+                type: integer
+              dryRun:
+                description: |-
+                  DryRun enables observation-only mode: decisions are logged but never applied.
+                  New deployments must run with DryRun true for at least 7 days before enabling live scaling.
+                type: boolean
+              hpaCoexistence:
+                description: |-
+                  HPACoexistence controls how this operator interacts with an existing HPA on the same Deployment.
+                  When Mode is "calibrated", MinReplicas must be >= HPA minReplicas and MaxReplicas must be <= HPA maxReplicas.
+                properties:
+                  hpaName:
+                    description: |-
+                      HPAName is the name of the HorizontalPodAutoscaler to coexist with.
+                      Required when Mode is "calibrated".
+                    type: string
+                  hpaNamespace:
+                    description: HPANamespace is the namespace of the HPA. Defaults
+                      to the CR namespace.
+                    type: string
+                  mode:
+                    description: |-
+                      Mode is either "owner" (agentic autoscaler is sole controller) or
+                      "calibrated" (operates inside the HPA's replica envelope as a safety net).
+                    enum:
+                    - owner
+                    - calibrated
+                    type: string
+                required:
+                - mode
+                type: object
+              logSource:
+                description: LogSource configures the log collection backend.
+                properties:
+                  kafka:
+                    description: Kafka holds configuration when Type is "kafka".
+                    properties:
+                      brokers:
+                        description: Brokers is the list of Kafka broker addresses.
+                        items:
+                          type: string
+                        minItems: 1
+                        type: array
+                      groupID:
+                        description: GroupID is the consumer group ID.
+                        minLength: 1
+                        type: string
+                      topic:
+                        description: Topic is the Kafka topic to consume.
+                        minLength: 1
+                        type: string
+                    required:
+                    - brokers
+                    - groupID
+                    - topic
+                    type: object
+                  loki:
+                    description: Loki holds configuration when Type is "loki".
+                    properties:
+                      query:
+                        description: Query is the LogQL query used to fetch relevant
+                          log lines.
+                        minLength: 1
+                        type: string
+                      url:
+                        description: URL is the base URL of the Loki HTTP API.
+                        minLength: 1
+                        type: string
+                    required:
+                    - query
+                    - url
+                    type: object
+                  type:
+                    description: Type is the log source type; must be "loki" or "kafka".
+                    enum:
+                    - loki
+                    - kafka
+                    type: string
+                required:
+                - type
+                type: object
+              maxReplicas:
+                description: MaxReplicas is the upper bound on replica count the operator
+                  may set.
+                format: int32
+                minimum: 1
+                type: integer
+              minReplicas:
+                description: MinReplicas is the lower bound on replica count the operator
+                  may set.
+                format: int32
+                minimum: 0
+                type: integer
+              namespace:
+                description: |-
+                  Namespace is the namespace of the target Deployment.
+                  Defaults to the namespace of this AgenticAutoscaler CR when omitted.
+                type: string
+              observability:
+                description: Observability configures Grafana annotation emission
+                  for decision audit trails.
+                properties:
+                  grafanaURL:
+                    description: GrafanaURL is the base URL of the Grafana instance.
+                    minLength: 1
+                    type: string
+                  secretRef:
+                    description: SecretRef is the name of the Kubernetes Secret holding
+                      the Grafana API token.
+                    minLength: 1
+                    type: string
+                required:
+                - grafanaURL
+                - secretRef
+                type: object
+              prometheusURL:
+                description: PrometheusURL is the base URL of the Prometheus HTTP
+                  API.
+                minLength: 1
+                type: string
+              targetDeployment:
+                description: TargetDeployment is the name of the Deployment this CR
+                  manages.
+                minLength: 1
+                type: string
+            required:
+            - cooldownSeconds
+            - logSource
+            - maxReplicas
+            - minReplicas
+            - prometheusURL
+            - targetDeployment
+            type: object
+          status:
+            description: AgenticAutoscalerStatus defines the observed state of AgenticAutoscaler.
+            properties:
+              currentReplicas:
+                description: CurrentReplicas is the replica count of the target Deployment
+                  as of the last reconcile.
+                format: int32
+                type: integer
+              hpaCoexistenceStatus:
+                description: |-
+                  HPACoexistenceStatus reflects the current HPA coexistence mode:
+                  "owner", "calibrated", or "conflict-detected".
+                type: string
+              lastDecisionReason:
+                description: LastDecisionReason is the human-readable explanation
+                  of the last scaling decision.
+                type: string
+              lastScaleTime:
+                description: LastScaleTime is the timestamp of the most recent live
+                  scale action.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the .metadata.generation this status
+                  was produced from.
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

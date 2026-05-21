@@ -1,0 +1,97 @@
+# -- Number of operator replicas. Keep at 1; leader election is not yet wired.
+replicaCount: 1
+
+image:
+  # -- OCI image repository for the operator binary.
+  repository: ghcr.io/ngoga-musagi/agentic-autoscaler
+  # -- Image tag. Defaults to the chart appVersion when set to "".
+  tag: ""
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  # -- Name of the ServiceAccount the operator Pod runs as.
+  name: agentic-autoscaler
+
+aiProvider:
+  # -- AI backend to use: "anthropic", "openai", or "ollama".
+  provider: "anthropic"
+  # -- Name of the Kubernetes Secret that holds the provider API key.
+  # Key inside the Secret must be "API_KEY".
+  # Not required when provider is "ollama".
+  secretRef: "agentic-autoscaler-ai-key"
+  # -- Override the model name. When empty the operator picks a safe default
+  # per provider (claude-sonnet-4-20250514 / gpt-4o / llama3:8b).
+  model: ""
+
+grafana:
+  # -- Base URL of the Grafana instance for decision annotations.
+  # Leave empty to disable Grafana annotation push.
+  url: ""
+  # -- Name of the Kubernetes Secret holding the Grafana API token.
+  # Key inside the Secret must be "GRAFANA_TOKEN".
+  secretRef: "agentic-autoscaler-grafana-token"
+
+hpa:
+  # -- Default HPA coexistence mode for new AgenticAutoscaler CRs.
+  # "calibrated" = nested within HPA bounds (safe default for new rollouts).
+  # "owner"      = agentic autoscaler is sole controller (disable HPA first).
+  coexistenceMode: "calibrated"
+
+# -- Start new deployments in dry-run mode. Decisions are logged but never
+# applied. Disable only after reviewing the decision log for 7+ days.
+dryRun: true
+
+ollama:
+  # -- Deploy the bundled Ollama sub-chart. Requires a node with 12 GB+ RAM.
+  enabled: false
+  # -- Ollama model to pull and serve. Must fit in the node's allocatable RAM.
+  model: "llama3:8b"
+  # -- Namespace to deploy Ollama into.
+  namespace: "ollama"
+  image:
+    repository: ollama/ollama
+    tag: "0.1.44"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "2"
+      memory: "12Gi"
+    limits:
+      cpu: "4"
+      memory: "16Gi"
+  # -- Node selector applied to the Ollama Pod (GPU / high-memory node pool).
+  nodeSelector: {}
+  # -- Tolerations for the ollama=true:NoSchedule taint on dedicated nodes.
+  tolerations:
+    - key: "ollama"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+# -- Extra environment variables injected into the operator container.
+# Useful for debugging flags or feature overrides.
+extraEnv: []
+# - name: LOG_LEVEL
+#   value: debug
+
+metrics:
+  # -- Port the operator exposes Prometheus metrics on.
+  port: 8080
+
+networkPolicy:
+  # -- Deploy a NetworkPolicy to restrict operator egress to known endpoints.
+  enabled: true
+  # -- Namespace where Prometheus is running.
+  prometheusNamespace: "monitoring"
+  prometheusPort: 9090
+  # -- Namespace where Loki is running.
+  lokiNamespace: "monitoring"
+  lokiPort: 3100
