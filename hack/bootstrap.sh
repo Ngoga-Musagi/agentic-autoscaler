@@ -222,7 +222,20 @@ helm upgrade --install agentic-autoscaler deploy/helm/ \
     --set grafana.secretRef=grafana-api-secret \
     --set dryRun=true \
     --set networkPolicy.enabled=false \
-    --wait --timeout 3m
+    --timeout 5m
+
+ok "Operator Helm release installed"
+
+echo "  → Waiting up to 120s for operator rollout..."
+if kubectl rollout status deployment/agentic-autoscaler \
+        -n agentic-autoscaler-system --timeout=120s 2>/dev/null; then
+    ok "Operator pod ready"
+else
+    warn "Operator pod not ready — check logs with:"
+    warn "  kubectl get pods -n agentic-autoscaler-system"
+    warn "  kubectl logs -n agentic-autoscaler-system -l app.kubernetes.io/name=agentic-autoscaler"
+    kubectl get pods -n agentic-autoscaler-system 2>/dev/null || true
+fi
 
 ok "Operator deployed  (dry-run=true)"
 

@@ -135,7 +135,6 @@ func main() {
 	if operatorNS == "" {
 		operatorNS = "default"
 	}
-	queryapi.NewServer(mgr.GetClient(), operatorNS).Start(ctrl.SetupSignalHandler())
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -147,8 +146,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx := ctrl.SetupSignalHandler()
+	queryapi.NewServer(mgr.GetClient(), operatorNS).Start(ctx)
+
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
