@@ -1,0 +1,19 @@
+# kind cluster config for local development.
+# One control-plane node. Extra port mappings let you reach cluster services
+# from your browser on the host without needing an ingress controller:
+#
+#   localhost:3000  → Grafana        (kubectl port-forward)
+#   localhost:9090  → Prometheus     (kubectl port-forward)
+#   localhost:3100  → Loki           (kubectl port-forward)
+#   localhost:8090  → Query UI       (kubectl port-forward)
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: agentic-autoscaler-dev
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"

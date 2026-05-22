@@ -69,6 +69,142 @@ test: manifests generate fmt vet envtest ## Run tests.
 test-e2e:
 	go test ./test/e2e/ -v -ginkgo.v
 
+##@ Local development (kind)
+
+HELM         ?= helm
+KIND_CLUSTER ?= agentic-autoscaler-dev
+DEV_IMG      ?= agentic-autoscaler:dev
+DEV_NS       ?= agentic-autoscaler-system
+
+.PHONY: kind-create
+kind-create: ## Create a local kind cluster (requires Docker).
+	kind get clusters | grep -q $(KIND_CLUSTER) \
+		&& echo "cluster $(KIND_CLUSTER) already exists" \
+		|| kind create cluster --config hack/kind-config.yaml --name $(KIND_CLUSTER)
+	kubectl config use-context kind-$(KIND_CLUSTER)
+	@echo "✓ cluster ready: $$(kubectl get nodes -o wide --no-headers | awk '{print $$1, $$5}')"
+
+.PHONY: kind-delete
+kind-delete: ## Delete the local kind cluster.
+	kind delete cluster --name $(KIND_CLUSTER)
+
+.PHONY: observability-stack
+observability-stack: ## Install Prometheus + Loki + Grafana into the monitoring namespace.
+	kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+	@echo "→ Adding Helm repos..."
+	$(HELM) repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
+	$(HELM) repo add grafana https://grafana.github.io/helm-charts 2>/dev/null || true
+	$(HELM) repo update
+	@echo "→ Installing kube-prometheus-stack (Prometheus + Grafana + Alertmanager)..."
+	$(HELM) upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+		--namespace monitoring \
+		--set grafana.adminPassword=admin \
+		--set grafana.sidecar.dashboards.enabled=true \
+		--set grafana.sidecar.dashboards.label=grafana_dashboard \
+		--set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
+		--set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
+		--wait --timeout 5m
+	@echo "→ Installing Loki + Promtail..."
+	$(HELM) upgrade --install loki grafana/loki-stack \
+		--namespace monitoring \
+		--set promtail.enabled=true \
+		--set loki.persistence.enabled=false \
+		--wait --timeout 3m
+	@echo "→ Importing decision-audit dashboard..."
+	kubectl create configmap agentic-autoscaler-dashboard \
+		--from-file=agentic-autoscaler-decisions.json=deploy/grafana/dashboard.json \
+		--namespace monitoring \
+		--dry-run=client -o yaml | kubectl apply -f -
+	kubectl label configmap agentic-autoscaler-dashboard \
+		grafana_dashboard=1 -n monitoring --overwrite
+	@echo "✓ Observability stack ready."
+
+.PHONY: dev-secrets
+dev-secrets: ## Create operator secrets. Reads ANTHROPIC_API_KEY from your shell env.
+	kubectl create namespace $(DEV_NS) --dry-run=client -o yaml | kubectl apply -f -
+	@if [ -n "$$ANTHROPIC_API_KEY" ]; then \
+		echo "→ Creating AI secret from ANTHROPIC_API_KEY env var..."; \
+	else \
+		echo "⚠  ANTHROPIC_API_KEY not set — operator will use rule-based fallback agent."; \
+		echo "   To use Claude: export ANTHROPIC_API_KEY=<key> && make dev-secrets"; \
+	fi
+	kubectl create secret generic ai-provider-secret \
+		--from-literal=ANTHROPIC_API_KEY=$${ANTHROPIC_API_KEY:-not-configured} \
+		--namespace $(DEV_NS) --dry-run=client -o yaml | kubectl apply -f -
+	kubectl create secret generic grafana-api-secret \
+		--from-literal=GRAFANA_TOKEN=$${GRAFANA_TOKEN:-not-configured} \
+		--namespace $(DEV_NS) --dry-run=client -o yaml | kubectl apply -f -
+
+.PHONY: dev-image
+dev-image: ## Build the operator Docker image and load it into kind (no registry needed).
+	docker build -t $(DEV_IMG) .
+	kind load docker-image $(DEV_IMG) --name $(KIND_CLUSTER)
+	@echo "✓ Image $(DEV_IMG) loaded into kind."
+
+.PHONY: dev-deploy
+dev-deploy: install dev-secrets ## Install CRD + RBAC + operator Deployment.
+	kubectl create namespace $(DEV_NS) --dry-run=client -o yaml | kubectl apply -f -
+	$(HELM) upgrade --install agentic-autoscaler deploy/helm/ \
+		--namespace $(DEV_NS) \
+		--set image.repository=agentic-autoscaler \
+		--set image.tag=dev \
+		--set image.pullPolicy=Never \
+		--set aiProvider.provider=anthropic \
+		--set aiProvider.secretRef=ai-provider-secret \
+		--set grafana.url=http://kube-prometheus-stack-grafana.monitoring \
+		--set grafana.secretRef=grafana-api-secret \
+		--set dryRun=true \
+		--set networkPolicy.enabled=false \
+		--wait --timeout 2m
+	kubectl set env deployment/agentic-autoscaler-agentic-autoscaler \
+		OPERATOR_NAMESPACE=$(DEV_NS) -n $(DEV_NS) 2>/dev/null || true
+	@echo "✓ Operator deployed."
+	@echo "  Logs: kubectl -n $(DEV_NS) logs -l app.kubernetes.io/name=agentic-autoscaler -f"
+
+.PHONY: sample-app
+sample-app: ## Deploy payment-service (podinfo) + HPA into the production namespace.
+	kubectl apply -f config/samples/dev-payment-service.yaml
+	@echo "✓ payment-service deployed (3 replicas, HPA min=2 max=20)."
+
+.PHONY: create-autoscaler
+create-autoscaler: ## Create the AgenticAutoscaler CR for payment-service.
+	kubectl apply -f config/samples/payment-service-autoscaler.yaml
+	@echo "✓ AgenticAutoscaler created. First reconcile in ~30s."
+	@echo "  Watch: kubectl -n production get agenticautoscaler payment-service-autoscaler -w"
+
+.PHONY: dev-setup
+dev-setup: kind-create observability-stack dev-image dev-deploy sample-app create-autoscaler ## Bootstrap the full local environment end-to-end.
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "  Full stack is running. Run 'make port-forward' in a new    "
+	@echo "  terminal, then open the URLs below.                        "
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@make open
+
+.PHONY: port-forward
+port-forward: ## Forward Grafana :3000, Prometheus :9090, and Query UI :8090 to localhost.
+	@echo "Starting port-forwards (Ctrl-C to stop all)..."
+	@echo "  Grafana   → http://localhost:3000  (admin / admin)"
+	@echo "  Prometheus→ http://localhost:9090"
+	@echo "  Query UI  → http://localhost:8090"
+	@trap 'kill %1 %2 %3 2>/dev/null' INT; \
+	kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80 & \
+	kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090 & \
+	kubectl -n $(DEV_NS) port-forward svc/agentic-autoscaler-agentic-autoscaler 8090:8090 & \
+	wait
+
+.PHONY: open
+open: ## Print all service URLs.
+	@echo ""
+	@echo "  Service          URL                         Notes"
+	@echo "  ───────────────  ──────────────────────────  ──────────────────────────────────"
+	@echo "  Grafana          http://localhost:3000        admin / admin"
+	@echo "  Prometheus       http://localhost:9090"
+	@echo "  Query UI         http://localhost:8090        Ask questions about scale decisions"
+	@echo ""
+	@echo "  Run 'make port-forward' first to activate the local URLs."
+	@echo ""
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter & yamllint
 	$(GOLANGCI_LINT) run

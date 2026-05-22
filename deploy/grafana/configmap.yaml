@@ -1,0 +1,26 @@
+# Grafana dashboard ConfigMap — loaded automatically by grafana-sc-dashboard
+# (the Grafana Helm chart's sidecar, enabled via grafana.sidecar.dashboards.enabled=true).
+#
+# To apply manually:
+#   kubectl apply -f deploy/grafana/configmap.yaml -n monitoring
+#
+# The grafana-sc-dashboard sidecar watches for ConfigMaps with the label
+# grafana_dashboard="1" in the configured namespace and loads them
+# into Grafana without restarting the pod.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentic-autoscaler-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"                    # picked up by grafana-sc-dashboard
+    app.kubernetes.io/managed-by: agentic-autoscaler
+    app.kubernetes.io/component: observability
+data:
+  agentic-autoscaler-decisions.json: |
+    # Content is the dashboard JSON from deploy/grafana/dashboard.json.
+    # This file is generated — edit dashboard.json and re-run:
+    #   kubectl create configmap agentic-autoscaler-dashboard \
+    #     --from-file=agentic-autoscaler-decisions.json=deploy/grafana/dashboard.json \
+    #     -n monitoring --dry-run=client -o yaml \
+    #     | kubectl apply -f -

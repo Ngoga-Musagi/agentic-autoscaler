@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	scalingv1alpha1 "github.com/Ngoga-Musagi/agentic-autoscaler/api/v1alpha1"
 	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/reasoning"
@@ -67,12 +68,31 @@ func newConfigMapRecorderForNamespace(c client.Client, ns string) *ConfigMapReco
 
 // Record appends rec to the ConfigMap audit log, creating the ConfigMap if it
 // does not exist, and rotates the entries to keep at most maxEntries.
+// It also emits a structured log line at Info level so Loki captures every
+// decision in the pod log stream — making them queryable without parsing the
+// ConfigMap.
 func (r *ConfigMapRecorder) Record(
 	ctx context.Context,
 	aa scalingv1alpha1.AgenticAutoscaler,
 	decision reasoning.ScaleDecision,
 ) error {
 	rec := NewDecisionRecord(aa, decision)
+
+	// Structured log line picked up by Loki via pod log scraping.
+	// LogQL: {app="agentic-autoscaler"} | json | action != "hold"
+	ctrllog.FromContext(ctx).Info("scale_decision",
+		"action", rec.Action,
+		"deployment", rec.Deployment,
+		"namespace", rec.Namespace,
+		"oldReplicas", rec.OldReplicas,
+		"newReplicas", rec.NewReplicas,
+		"reason", rec.Reason,
+		"confidence", rec.Confidence,
+		"provider", rec.Provider,
+		"patterns", rec.PatternsMatched,
+		"dryRun", rec.DryRun,
+		"timestamp", rec.Timestamp,
+	)
 
 	cm := &corev1.ConfigMap{}
 	namespacedName := types.NamespacedName{Name: auditLogCMName, Namespace: r.namespace}
@@ -158,4 +178,20 @@ func unmarshalEntries(raw string) ([]DecisionRecord, error) {
 		return nil, fmt.Errorf("unmarshal audit entries: %w", err)
 	}
 	return entries, nil
+}
+
+// ReadAuditLog fetches all DecisionRecords stored in the operator audit
+// ConfigMap. It is safe to call from other packages (e.g. the query API).
+func ReadAuditLog(ctx context.Context, c client.Client, namespace string) ([]DecisionRecord, error) {
+	cm := &corev1.ConfigMap{}
+	if err := c.Get(ctx, types.NamespacedName{
+		Name:      auditLogCMName,
+		Namespace: namespace,
+	}, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get audit configmap: %w", err)
+	}
+	return unmarshalEntries(cm.Data[auditLogKey])
 }

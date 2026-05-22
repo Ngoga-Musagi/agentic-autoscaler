@@ -36,6 +36,7 @@ import (
 
 	scalingv1alpha1 "github.com/Ngoga-Musagi/agentic-autoscaler/api/v1alpha1"
 	"github.com/Ngoga-Musagi/agentic-autoscaler/internal/controller"
+	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/queryapi"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -126,6 +127,15 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "AgenticAutoscaler")
 		os.Exit(1)
 	}
+
+	// Start the interactive decision-query UI on :8090.
+	// The server reads the audit ConfigMap and answers natural-language questions
+	// about scaling decisions via the same AI provider the reasoning engine uses.
+	operatorNS := os.Getenv("OPERATOR_NAMESPACE")
+	if operatorNS == "" {
+		operatorNS = "default"
+	}
+	queryapi.NewServer(mgr.GetClient(), operatorNS).Start(ctrl.SetupSignalHandler())
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

@@ -39,7 +39,14 @@ spec:
             - name: metrics
               containerPort: {{ .Values.metrics.port }}
               protocol: TCP
+            - name: query-ui
+              containerPort: 8090
+              protocol: TCP
           env:
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             # ---- AI provider ------------------------------------------------
             - name: AI_PROVIDER
               value: {{ .Values.aiProvider.provider | quote }}
