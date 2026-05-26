@@ -101,6 +101,30 @@ type ObservabilityConfig struct {
 	SecretRef string `json:"secretRef"`
 }
 
+// MetricQueries lets a service override the PromQL the operator runs, so any
+// application can be autoscaled regardless of its metric names. Each field is a
+// full PromQL expression; the literal token $TARGET is replaced with the target
+// Deployment name at query time. Empty fields fall back to the operator's
+// defaults, which assume standard Prometheus HTTP instrumentation
+// (http_requests_total / http_request_duration_seconds_bucket).
+type MetricQueries struct {
+	// LatencyP99 must return p99 latency in seconds.
+	// +optional
+	LatencyP99 string `json:"latencyP99,omitempty"`
+
+	// ErrorRate must return the error percentage (0-100).
+	// +optional
+	ErrorRate string `json:"errorRate,omitempty"`
+
+	// CPUUtilization must return average CPU utilisation as a percentage.
+	// +optional
+	CPUUtilization string `json:"cpuUtilization,omitempty"`
+
+	// RequestsPerSecond must return the request rate.
+	// +optional
+	RequestsPerSecond string `json:"requestsPerSecond,omitempty"`
+}
+
 // AgenticAutoscalerSpec defines the desired state of AgenticAutoscaler.
 type AgenticAutoscalerSpec struct {
 	// TargetDeployment is the name of the Deployment this CR manages.
@@ -115,6 +139,11 @@ type AgenticAutoscalerSpec struct {
 	// PrometheusURL is the base URL of the Prometheus HTTP API.
 	// +kubebuilder:validation:MinLength=1
 	PrometheusURL string `json:"prometheusURL"`
+
+	// Metrics optionally overrides the PromQL queries used to read signals, so
+	// services that do not use the default metric names can still be autoscaled.
+	// +optional
+	Metrics MetricQueries `json:"metrics,omitempty"`
 
 	// LogSource configures the log collection backend.
 	LogSource LogSourceConfig `json:"logSource"`

@@ -169,6 +169,25 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
+              metrics:
+                description: |-
+                  Metrics optionally overrides the PromQL queries used to read signals, so
+                  services that do not use the default metric names can still be autoscaled.
+                properties:
+                  cpuUtilization:
+                    description: CPUUtilization must return average CPU utilisation
+                      as a percentage.
+                    type: string
+                  errorRate:
+                    description: ErrorRate must return the error percentage (0-100).
+                    type: string
+                  latencyP99:
+                    description: LatencyP99 must return p99 latency in seconds.
+                    type: string
+                  requestsPerSecond:
+                    description: RequestsPerSecond must return the request rate.
+                    type: string
+                type: object
               minReplicas:
                 description: MinReplicas is the lower bound on replica count the operator
                   may set.

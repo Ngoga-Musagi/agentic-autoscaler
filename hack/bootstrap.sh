@@ -4,10 +4,13 @@
 # Auto-installs kind and kubectl if missing.
 #
 # Usage:
-#   bash hack/bootstrap.sh
+#   bash hack/bootstrap.sh                  # base stack (dry-run, read-only console)
+#   WITH_LOADGEN=1 bash hack/bootstrap.sh   # + load generator, write-mode console, LIVE scaling
 #
-# Optional env vars:
+# Credentials are read from the shell environment, falling back to a .env file
+# in the repo root if present:
 #   ANTHROPIC_API_KEY=sk-ant-...   enables AI reasoning (falls back to rules if unset)
+#   ANTHROPIC_MODEL=...            overrides the model (e.g. claude-sonnet-4-6)
 #   GRAFANA_TOKEN=...              enables Grafana annotation push (optional)
 set -euo pipefail
 
@@ -16,6 +19,10 @@ step() { echo -e "\n${CYAN}━━ $* ━━━━━━━━━━━━━━�
 ok()   { echo -e "${GREEN}  ✓ $*${NC}"; }
 warn() { echo -e "${YELLOW}  ⚠ $*${NC}"; }
 die()  { echo -e "${RED}  ✗ $*${NC}"; exit 1; }
+
+OPERATOR_NS="agentic-autoscaler-system"
+DEPLOY_NAME="agentic-autoscaler-agentic-autoscaler"   # chart fullname = release-chart
+WITH_LOADGEN="${WITH_LOADGEN:-0}"
 
 # ── Detect OS (Windows/Git Bash vs Linux/WSL2) ───────────────────────────────
 case "$(uname -s)" in
@@ -29,6 +36,17 @@ esac
 LOCAL_BIN="$HOME/.local/bin"
 mkdir -p "$LOCAL_BIN"
 export PATH="$LOCAL_BIN:$PATH"
+
+# ── Credential resolution (shell env wins, else .env, CR-safe) ────────────────
+get_env_val() {  # get_env_val KEY -> value from .env (CR/quote-stripped) or empty
+    [ -f .env ] || return 0
+    # The trailing `|| true` keeps a missing key from tripping `set -e`/pipefail.
+    grep -E "^[[:space:]]*$1=" .env 2>/dev/null | head -1 | cut -d= -f2- \
+        | tr -d '\r' | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//" || true
+}
+ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-$(get_env_val ANTHROPIC_API_KEY)}"
+ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-$(get_env_val ANTHROPIC_MODEL)}"
+GRAFANA_TOKEN="${GRAFANA_TOKEN:-$(get_env_val GRAFANA_TOKEN)}"
 
 # ── Tool installer helpers ───────────────────────────────────────────────────
 
@@ -75,6 +93,22 @@ install_kubectl() {
         ;;
     esac
     ok "kubectl installed → $LOCAL_BIN"
+}
+
+# Create/update a single-key secret WITHOUT clobbering an existing real value.
+ensure_secret() {  # ensure_secret <name> <key> <value>
+    local name="$1" key="$2" val="$3"
+    if [ -n "$val" ] && [ "$val" != "not-configured" ]; then
+        kubectl create secret generic "$name" --from-literal="$key=$val" \
+            --namespace "$OPERATOR_NS" --dry-run=client -o yaml | kubectl apply -f -
+        ok "$name set from supplied value"
+    elif kubectl get secret "$name" -n "$OPERATOR_NS" >/dev/null 2>&1; then
+        warn "$name already exists — leaving it unchanged (no value supplied)"
+    else
+        kubectl create secret generic "$name" --from-literal="$key=not-configured" \
+            --namespace "$OPERATOR_NS" --dry-run=client -o yaml | kubectl apply -f -
+        warn "$name created as placeholder (not-configured)"
+    fi
 }
 
 # ── 0. Check / install prerequisites ─────────────────────────────────────────
@@ -133,25 +167,44 @@ helm repo add prometheus-community https://prometheus-community.github.io/helm-c
 helm repo add grafana              https://grafana.github.io/helm-charts              2>/dev/null || true
 helm repo update
 
-echo "  → kube-prometheus-stack..."
-helm upgrade --install kube-prometheus-stack \
-    prometheus-community/kube-prometheus-stack \
-    --namespace monitoring \
-    --set grafana.adminPassword=admin \
-    --set grafana.sidecar.dashboards.enabled=true \
-    --set grafana.sidecar.dashboards.label=grafana_dashboard \
-    --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
-    --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
-    --wait --timeout 6m
-ok "Prometheus + Grafana ready"
+# Skip re-installing an already-present release: upgrading a working stack to a
+# newer chart can break it (e.g. Grafana), and we only need it present + healthy.
+if helm status kube-prometheus-stack -n monitoring >/dev/null 2>&1; then
+    warn "kube-prometheus-stack already installed — reusing it (skipping upgrade)"
+else
+    echo "  → kube-prometheus-stack..."
+    helm upgrade --install kube-prometheus-stack \
+        prometheus-community/kube-prometheus-stack \
+        --namespace monitoring \
+        --set grafana.adminPassword=admin \
+        --set grafana.sidecar.dashboards.enabled=true \
+        --set grafana.sidecar.dashboards.label=grafana_dashboard \
+        --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
+        --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
+        --wait --timeout 6m
+    ok "Prometheus + Grafana ready"
+fi
 
-echo "  → loki-stack..."
-helm upgrade --install loki grafana/loki-stack \
-    --namespace monitoring \
-    --set promtail.enabled=true \
-    --set loki.persistence.enabled=false \
-    --wait --timeout 4m
-ok "Loki ready"
+if helm status loki -n monitoring >/dev/null 2>&1; then
+    warn "loki already installed — reusing it (skipping upgrade)"
+else
+    echo "  → loki-stack..."
+    helm upgrade --install loki grafana/loki-stack \
+        --namespace monitoring \
+        --set promtail.enabled=true \
+        --set loki.persistence.enabled=false \
+        --wait --timeout 4m
+    ok "Loki ready"
+fi
+
+# loki-stack registers its Grafana datasource as the default, which collides
+# with the Prometheus default and crash-loops Grafana. Demote Loki to non-default.
+if kubectl -n monitoring get cm loki-loki-stack -o jsonpath='{.data.loki-stack-datasource\.yaml}' 2>/dev/null | grep -q 'isDefault: true'; then
+    kubectl -n monitoring patch cm loki-loki-stack --type merge \
+        -p '{"data":{"loki-stack-datasource.yaml":"apiVersion: 1\ndatasources:\n- name: Loki\n  type: loki\n  access: proxy\n  url: \"http://loki:3100\"\n  version: 1\n  isDefault: false\n  jsonData:\n    {}"}}' >/dev/null
+    kubectl -n monitoring rollout restart deploy kube-prometheus-stack-grafana >/dev/null 2>&1 || true
+    ok "Grafana datasource conflict fixed (Loki demoted from default)"
+fi
 
 echo "  → Loading decision-audit dashboard..."
 kubectl create configmap agentic-autoscaler-dashboard \
@@ -172,34 +225,28 @@ ok "Image built and loaded into kind"
 # ── 4. Secrets ────────────────────────────────────────────────────────────────
 step "4/7  Creating namespace and secrets"
 
-kubectl create namespace agentic-autoscaler-system --dry-run=client -o yaml | kubectl apply -f -
+kubectl create namespace "$OPERATOR_NS" --dry-run=client -o yaml | kubectl apply -f -
 
-if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+if [ -n "$ANTHROPIC_API_KEY" ]; then
     ok "ANTHROPIC_API_KEY found — AI reasoning enabled"
 else
-    warn "ANTHROPIC_API_KEY not set — using rule-based fallback"
+    warn "ANTHROPIC_API_KEY not set (shell env or .env) — using rule-based fallback"
     warn "Re-run with: ANTHROPIC_API_KEY=sk-ant-... bash hack/bootstrap.sh"
 fi
 
-kubectl create secret generic ai-provider-secret \
-    --from-literal=API_KEY="${ANTHROPIC_API_KEY:-not-configured}" \
-    --namespace agentic-autoscaler-system \
-    --dry-run=client -o yaml | kubectl apply -f -
-
-kubectl create secret generic grafana-api-secret \
-    --from-literal=GRAFANA_TOKEN="${GRAFANA_TOKEN:-not-configured}" \
-    --namespace agentic-autoscaler-system \
-    --dry-run=client -o yaml | kubectl apply -f -
+# Never overwrite an existing real key with a placeholder.
+ensure_secret ai-provider-secret API_KEY      "$ANTHROPIC_API_KEY"
+ensure_secret grafana-api-secret GRAFANA_TOKEN "$GRAFANA_TOKEN"
 
 # Annotate secrets with Helm ownership so helm upgrade --install can adopt them
 for secret in ai-provider-secret grafana-api-secret; do
     kubectl annotate secret "$secret" \
         meta.helm.sh/release-name=agentic-autoscaler \
-        meta.helm.sh/release-namespace=agentic-autoscaler-system \
-        --namespace agentic-autoscaler-system --overwrite
+        meta.helm.sh/release-namespace="$OPERATOR_NS" \
+        --namespace "$OPERATOR_NS" --overwrite
     kubectl label secret "$secret" \
         app.kubernetes.io/managed-by=Helm \
-        --namespace agentic-autoscaler-system --overwrite
+        --namespace "$OPERATOR_NS" --overwrite
 done
 
 ok "Secrets applied"
@@ -211,8 +258,16 @@ kubectl apply -f config/crd/bases/
 
 helm dependency update deploy/helm/ > /dev/null 2>&1 || true
 
+# Build the optional --set flags: model override, and (demo) console write mode.
+EXTRA_SET=()
+[ -n "$ANTHROPIC_MODEL" ] && EXTRA_SET+=(--set "aiProvider.model=$ANTHROPIC_MODEL")
+if [ "$WITH_LOADGEN" = "1" ]; then
+    EXTRA_SET+=(--set console.writeEnabled=true)
+    EXTRA_SET+=(--set console.loadgenURL=http://loadgen.loadgen.svc.cluster.local:8080)
+fi
+
 helm upgrade --install agentic-autoscaler deploy/helm/ \
-    --namespace agentic-autoscaler-system \
+    --namespace "$OPERATOR_NS" \
     --set image.repository=agentic-autoscaler \
     --set image.tag=dev \
     --set image.pullPolicy=Never \
@@ -222,19 +277,20 @@ helm upgrade --install agentic-autoscaler deploy/helm/ \
     --set grafana.secretRef=grafana-api-secret \
     --set dryRun=true \
     --set networkPolicy.enabled=false \
+    "${EXTRA_SET[@]}" \
     --timeout 5m
 
 ok "Operator Helm release installed"
 
 echo "  → Waiting up to 120s for operator rollout..."
-if kubectl rollout status deployment/agentic-autoscaler \
-        -n agentic-autoscaler-system --timeout=120s 2>/dev/null; then
+if kubectl rollout status "deployment/$DEPLOY_NAME" \
+        -n "$OPERATOR_NS" --timeout=120s 2>/dev/null; then
     ok "Operator pod ready"
 else
     warn "Operator pod not ready — check logs with:"
-    warn "  kubectl get pods -n agentic-autoscaler-system"
-    warn "  kubectl logs -n agentic-autoscaler-system -l app.kubernetes.io/name=agentic-autoscaler"
-    kubectl get pods -n agentic-autoscaler-system 2>/dev/null || true
+    warn "  kubectl get pods -n $OPERATOR_NS"
+    warn "  kubectl logs -n $OPERATOR_NS -l app.kubernetes.io/name=agentic-autoscaler"
+    kubectl get pods -n "$OPERATOR_NS" 2>/dev/null || true
 fi
 
 ok "Operator deployed  (dry-run=true)"
@@ -280,6 +336,24 @@ EOF
 
 ok "AgenticAutoscaler created  (dry-run=true)"
 
+# ── 8. Demo extras (only with WITH_LOADGEN=1) ────────────────────────────────
+if [ "$WITH_LOADGEN" = "1" ]; then
+    step "8  Demo: load generator + live scaling"
+
+    echo "  → Building loadgen image..."
+    docker build -f Dockerfile.loadgen -t agentic-autoscaler-loadgen:dev .
+    kind load docker-image agentic-autoscaler-loadgen:dev --name agentic-autoscaler-dev
+    kubectl apply -f deploy/loadgen/loadgen.yaml
+    kubectl -n loadgen rollout status deploy/loadgen --timeout=120s || \
+        warn "loadgen not ready yet — check: kubectl -n loadgen get pods"
+    ok "Load generator deployed"
+
+    echo "  → Switching payment-service-autoscaler to LIVE (dryRun=false, cooldown=60s)..."
+    kubectl -n production patch agenticautoscaler payment-service-autoscaler \
+        --type merge -p '{"spec":{"dryRun":false,"cooldownSeconds":60}}'
+    ok "Autoscaler is now LIVE — console write mode and Load tab are enabled"
+fi
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -291,9 +365,20 @@ echo -e "  ${CYAN}bash hack/port-forward.sh${NC}"
 echo ""
 echo "  Then open in your browser:"
 echo "    Grafana   →  http://localhost:3000   (admin / admin)"
-echo "    Query UI  →  http://localhost:8090"
+echo "    Console   →  http://localhost:8090"
 echo "    Prometheus→  http://localhost:9090"
 echo ""
+if [ "$WITH_LOADGEN" = "1" ]; then
+    echo "  Drive load (watch replicas climb), e.g.:"
+    echo -e "  ${CYAN}make load-up RPS=300 ERRPCT=15${NC}    (or use the console Load tab)"
+    echo -e "  ${CYAN}make load-down${NC}                    (stop → scales back down)"
+    echo ""
+else
+    echo "  This is the BASE stack (dry-run, read-only console)."
+    echo "  For load-driven LIVE scaling, re-run with:"
+    echo -e "  ${CYAN}WITH_LOADGEN=1 bash hack/bootstrap.sh${NC}"
+    echo ""
+fi
 echo "  Watch live operator decisions:"
-echo -e "  ${CYAN}kubectl -n agentic-autoscaler-system logs -l app.kubernetes.io/name=agentic-autoscaler -f${NC}"
+echo -e "  ${CYAN}kubectl -n $OPERATOR_NS logs -l app.kubernetes.io/name=agentic-autoscaler -f${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

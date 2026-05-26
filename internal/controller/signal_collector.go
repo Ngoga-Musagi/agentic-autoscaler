@@ -46,7 +46,13 @@ func (d *DefaultSignalCollector) Collect(
 	spec scalingv1alpha1.AgenticAutoscalerSpec,
 ) (signals.SystemSnapshot, error) {
 	collector := signals.NewPrometheusCollector(spec.PrometheusURL)
-	metrics, err := collector.Collect(ctx, spec.TargetDeployment)
+	queries := signals.Queries{
+		LatencyP99:        spec.Metrics.LatencyP99,
+		ErrorRate:         spec.Metrics.ErrorRate,
+		CPUUtilization:    spec.Metrics.CPUUtilization,
+		RequestsPerSecond: spec.Metrics.RequestsPerSecond,
+	}
+	metrics, err := collector.CollectWithQueries(ctx, spec.TargetDeployment, queries)
 	if err != nil {
 		return signals.SystemSnapshot{}, fmt.Errorf("prometheus: %w", err)
 	}

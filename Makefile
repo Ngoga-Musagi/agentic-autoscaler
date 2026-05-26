@@ -75,6 +75,14 @@ HELM         ?= helm
 KIND_CLUSTER ?= agentic-autoscaler-dev
 DEV_IMG      ?= agentic-autoscaler:dev
 DEV_NS       ?= agentic-autoscaler-system
+LOADGEN_IMG  ?= agentic-autoscaler-loadgen:dev
+# Load generator knobs (override on the command line, e.g. make load-up RPS=400).
+LOAD_TARGET  ?= http://payment-service.production:9898
+RPS          ?= 200
+DURATION     ?= 600
+ERRPCT       ?= 0
+DELAYMS      ?= 0
+CURL_IMG     ?= curlimages/curl:8.7.1
 
 .PHONY: kind-create
 kind-create: ## Create a local kind cluster (requires Docker).
@@ -171,6 +179,47 @@ create-autoscaler: ## Create the AgenticAutoscaler CR for payment-service.
 	kubectl apply -f config/samples/payment-service-autoscaler.yaml
 	@echo "✓ AgenticAutoscaler created. First reconcile in ~30s."
 	@echo "  Watch: kubectl -n production get agenticautoscaler payment-service-autoscaler -w"
+
+.PHONY: loadgen-image
+loadgen-image: ## Build the load generator image and load it into kind.
+	docker build -f Dockerfile.loadgen -t $(LOADGEN_IMG) .
+	kind load docker-image $(LOADGEN_IMG) --name $(KIND_CLUSTER)
+	@echo "✓ Image $(LOADGEN_IMG) loaded into kind."
+
+.PHONY: loadgen-deploy
+loadgen-deploy: ## Deploy the load generator (DEMO ONLY) into the loadgen namespace.
+	kubectl apply -f deploy/loadgen/loadgen.yaml
+	kubectl -n loadgen rollout status deploy/loadgen --timeout=60s
+	@echo "✓ loadgen ready at http://loadgen.loadgen.svc.cluster.local:8080"
+
+.PHONY: demo-load
+demo-load: loadgen-image loadgen-deploy ## Deploy loadgen and enable the console Load tab + write mode.
+	$(HELM) upgrade agentic-autoscaler deploy/helm/ --namespace $(DEV_NS) --reuse-values \
+		--set console.writeEnabled=true \
+		--set console.loadgenURL=http://loadgen.loadgen.svc.cluster.local:8080
+	kubectl -n $(DEV_NS) rollout restart deploy/agentic-autoscaler-agentic-autoscaler
+	@echo "✓ Console write mode ON, Load tab enabled. Reopen http://localhost:8090 (Load tab)."
+
+.PHONY: load-up
+load-up: ## Start load. Override RPS=/DURATION=/ERRPCT=/DELAYMS=/LOAD_TARGET=.
+	kubectl run loadctl-$$(date +%s) --rm -i --restart=Never -n loadgen --image=$(CURL_IMG) -- \
+		curl -s -X POST http://loadgen.loadgen:8080/start -H 'Content-Type: application/json' \
+		-d '{"targetURL":"$(LOAD_TARGET)","rps":$(RPS),"durationSec":$(DURATION),"errorPct":$(ERRPCT),"delayMs":$(DELAYMS)}'
+	@echo ""
+	@echo "✓ load started (rps=$(RPS), $(DURATION)s). Watch: kubectl -n production get deploy payment-service -w"
+
+.PHONY: load-down
+load-down: ## Stop the load generator; replicas scale back down after cooldown.
+	kubectl run loadctl-$$(date +%s) --rm -i --restart=Never -n loadgen --image=$(CURL_IMG) -- \
+		curl -s -X POST http://loadgen.loadgen:8080/stop
+	@echo ""
+	@echo "✓ load stopped."
+
+.PHONY: load-status
+load-status: ## Print the current load generator status.
+	kubectl run loadctl-$$(date +%s) --rm -i --restart=Never -n loadgen --image=$(CURL_IMG) -- \
+		curl -s http://loadgen.loadgen:8080/status
+	@echo ""
 
 .PHONY: dev-setup
 dev-setup: kind-create observability-stack dev-image dev-deploy sample-app create-autoscaler ## Bootstrap the full local environment end-to-end.

@@ -24,8 +24,11 @@ Kubernetes-native operator that extends autoscaling beyond CPU/memory by fusing 
 | `pkg/policy/` | Bounds enforcement + cooldown + HPA coordination |
 | `pkg/scaler/` | Kubernetes API + KEDA execution |
 | `pkg/observability/` | Grafana annotations + decision audit log |
+| `pkg/queryapi/` | Web console on :8090 — decision explorer + management API (onboard/edit/delete CRs) + load proxy |
+| `cmd/loadgen/` | Demo HTTP load generator with a control API (testing only, never production) |
 | `config/` | Generated CRD, RBAC, manager manifests |
 | `deploy/helm/` | Helm chart for cluster installation |
+| `deploy/loadgen/` | Load generator Deployment + Service (opt-in demo) |
 
 ## Critical rules
 

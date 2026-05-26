@@ -81,6 +81,20 @@ spec:
                   name: {{ .Values.grafana.secretRef }}
                   key: GRAFANA_TOKEN
             {{- end }}
+            # ---- Console (management + load generation) ---------------------
+            - name: CONSOLE_WRITE_ENABLED
+              value: {{ .Values.console.writeEnabled | quote }}
+            {{- if .Values.console.authSecretRef }}
+            - name: CONSOLE_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.console.authSecretRef }}
+                  key: CONSOLE_AUTH_TOKEN
+            {{- end }}
+            {{- if .Values.console.loadgenURL }}
+            - name: LOADGEN_URL
+              value: {{ .Values.console.loadgenURL | quote }}
+            {{- end }}
             # ---- Extra env overrides ----------------------------------------
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}

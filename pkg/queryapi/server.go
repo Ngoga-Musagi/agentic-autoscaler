@@ -57,18 +57,30 @@ const (
 type Server struct {
 	k8sClient client.Client
 	namespace string
+	cfg       ConsoleConfig
 	httpSrv   *http.Server
 }
 
-// NewServer creates a Server that reads the audit log from namespace.
-// Call Start to begin serving.
-func NewServer(c client.Client, namespace string) *Server {
-	s := &Server{k8sClient: c, namespace: namespace}
+// NewServer creates a Server that reads the audit log from namespace and serves
+// the management console according to cfg. Call Start to begin serving.
+func NewServer(c client.Client, namespace string, cfg ConsoleConfig) *Server {
+	s := &Server{k8sClient: c, namespace: namespace, cfg: cfg}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleUI)
+	// Decision explorer (read-only).
 	mux.HandleFunc("/api/decisions", s.handleDecisions)
 	mux.HandleFunc("/api/query", s.handleQuery)
+	// Console: discovery + management of AgenticAutoscaler CRs.
+	mux.HandleFunc("/api/config", s.handleConfig)
+	mux.HandleFunc("/api/namespaces", s.handleNamespaces)
+	mux.HandleFunc("/api/deployments", s.handleDeployments)
+	mux.HandleFunc("/api/autoscalers", s.handleAutoscalers)
+	mux.HandleFunc("/api/autoscalers/", s.handleAutoscalerItem)
+	// Load generator control proxy.
+	mux.HandleFunc("/api/load/start", s.handleLoadStart)
+	mux.HandleFunc("/api/load/stop", s.handleLoadStop)
+	mux.HandleFunc("/api/load/status", s.handleLoadStatus)
 
 	s.httpSrv = &http.Server{
 		Addr:         queryServerAddr,

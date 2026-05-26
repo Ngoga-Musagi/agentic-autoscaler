@@ -22,6 +22,14 @@ aiProvider:
   # -- Override the model name. When empty the operator picks a safe default
   # per provider (claude-sonnet-4-20250514 / gpt-4o / llama3:8b).
   model: ""
+  # -- Whether the chart creates the API key Secret when it is ABSENT. The chart
+  # never reads or overwrites an existing Secret, so a real key survives every
+  # upgrade. Set false to manage it entirely out-of-band (Vault, ESO, etc.).
+  createSecret: true
+  # -- Initial API key, used ONLY when the chart first creates the Secret. Prefer
+  # leaving this empty and setting the key out-of-band — rotate by patching the
+  # Secret directly; changing this value never updates an existing Secret.
+  apiKey: ""
 
 grafana:
   # -- Base URL of the Grafana instance for decision annotations.
@@ -30,6 +38,25 @@ grafana:
   # -- Name of the Kubernetes Secret holding the Grafana API token.
   # Key inside the Secret must be "GRAFANA_TOKEN".
   secretRef: "agentic-autoscaler-grafana-token"
+  # -- Whether the chart creates the Grafana token Secret when ABSENT. Like the
+  # AI key, an existing Secret is never overwritten.
+  createSecret: true
+  # -- Grafana token, used only when the chart first creates the Secret.
+  token: ""
+
+console:
+  # -- Allow the web console (:8090) to create/edit/delete AgenticAutoscaler CRs
+  # and drive the load generator. Default false keeps the console read-only.
+  # Enabling this lets anyone who can reach :8090 (with the token, if set) change
+  # autoscaling cluster-wide — read .claude/rules/security.md before turning on.
+  writeEnabled: false
+  # -- Name of an existing Secret holding key CONSOLE_AUTH_TOKEN. When set, every
+  # mutating console request must present it as a Bearer token. The chart never
+  # creates this Secret — manage it out-of-band. Empty disables auth.
+  authSecretRef: ""
+  # -- Base URL of the load generator control API. Empty hides the Load tab.
+  # Demo value: http://loadgen.loadgen.svc.cluster.local:8080
+  loadgenURL: ""
 
 hpa:
   # -- Default HPA coexistence mode for new AgenticAutoscaler CRs.

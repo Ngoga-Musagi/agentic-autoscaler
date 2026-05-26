@@ -29,6 +29,45 @@ import (
 
 const collectorHTTPTimeout = 10 * time.Second
 
+// targetToken is replaced with the target Deployment name inside every query
+// before it is sent to Prometheus, so a query can be written once and reused.
+const targetToken = "$TARGET"
+
+// Default PromQL for standard Prometheus HTTP instrumentation. These reproduce
+// the operator's original hard-coded queries; $TARGET is the Deployment name.
+const (
+	defaultLatencyP99Query = `histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{service="$TARGET"}[2m]))`
+	defaultErrorRateQuery  = `rate(http_requests_total{service="$TARGET",status=~"5.."}[2m]) / rate(http_requests_total{service="$TARGET"}[2m]) * 100`
+	defaultCPUQuery        = `avg(rate(container_cpu_usage_seconds_total{pod=~"$TARGET-.*"}[2m])) * 100`
+	defaultRPSQuery        = `rate(http_requests_total{service="$TARGET"}[2m])`
+)
+
+// Queries holds optional PromQL overrides. Any empty field falls back to the
+// matching default. This is what makes the operator reusable across services
+// that do not follow the default metric-naming conventions.
+type Queries struct {
+	LatencyP99        string
+	ErrorRate         string
+	CPUUtilization    string
+	RequestsPerSecond string
+}
+
+// resolve fills empty fields with defaults and substitutes the target name.
+func (q Queries) resolve(target string) Queries {
+	sub := func(s, def string) string {
+		if strings.TrimSpace(s) == "" {
+			s = def
+		}
+		return strings.ReplaceAll(s, targetToken, target)
+	}
+	return Queries{
+		LatencyP99:        sub(q.LatencyP99, defaultLatencyP99Query),
+		ErrorRate:         sub(q.ErrorRate, defaultErrorRateQuery),
+		CPUUtilization:    sub(q.CPUUtilization, defaultCPUQuery),
+		RequestsPerSecond: sub(q.RequestsPerSecond, defaultRPSQuery),
+	}
+}
+
 // PrometheusCollector queries the Prometheus HTTP API to collect service metrics.
 type PrometheusCollector struct {
 	baseURL string
@@ -45,38 +84,36 @@ func NewPrometheusCollector(prometheusURL string) *PrometheusCollector {
 	}
 }
 
-// Collect runs the four standard PromQL queries for targetDeployment and returns
-// a MetricSnapshot. An empty result from Prometheus (no time-series data yet) is
-// treated as zero rather than an error, since new deployments may not have metrics.
+// Collect runs the default PromQL queries for targetDeployment. It is a thin
+// wrapper over CollectWithQueries with no overrides.
 func (c *PrometheusCollector) Collect(ctx context.Context, targetDeployment string) (MetricSnapshot, error) {
-	latencySec, err := c.query(ctx, fmt.Sprintf(
-		`histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{service="%s"}[2m]))`,
-		targetDeployment,
-	))
+	return c.CollectWithQueries(ctx, targetDeployment, Queries{})
+}
+
+// CollectWithQueries runs the four signal queries for targetDeployment, using
+// any overrides supplied in q and falling back to the defaults otherwise, and
+// returns a MetricSnapshot. An empty result from Prometheus (no time-series
+// data yet) is treated as zero rather than an error, since new deployments may
+// not have metrics.
+func (c *PrometheusCollector) CollectWithQueries(ctx context.Context, targetDeployment string, q Queries) (MetricSnapshot, error) {
+	rq := q.resolve(targetDeployment)
+
+	latencySec, err := c.query(ctx, rq.LatencyP99)
 	if err != nil {
 		return MetricSnapshot{}, fmt.Errorf("query latency_p99: %w", err)
 	}
 
-	errorRate, err := c.query(ctx, fmt.Sprintf(
-		`rate(http_requests_total{service="%s",status=~"5.."}[2m]) / rate(http_requests_total{service="%s"}[2m]) * 100`,
-		targetDeployment, targetDeployment,
-	))
+	errorRate, err := c.query(ctx, rq.ErrorRate)
 	if err != nil {
 		return MetricSnapshot{}, fmt.Errorf("query error_rate: %w", err)
 	}
 
-	cpuUtil, err := c.query(ctx, fmt.Sprintf(
-		`avg(rate(container_cpu_usage_seconds_total{pod=~"%s-.*"}[2m])) * 100`,
-		targetDeployment,
-	))
+	cpuUtil, err := c.query(ctx, rq.CPUUtilization)
 	if err != nil {
 		return MetricSnapshot{}, fmt.Errorf("query cpu_util: %w", err)
 	}
 
-	rps, err := c.query(ctx, fmt.Sprintf(
-		`rate(http_requests_total{service="%s"}[2m])`,
-		targetDeployment,
-	))
+	rps, err := c.query(ctx, rq.RequestsPerSecond)
 	if err != nil {
 		return MetricSnapshot{}, fmt.Errorf("query requests_per_sec: %w", err)
 	}

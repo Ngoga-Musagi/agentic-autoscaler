@@ -25,6 +25,15 @@ spec:
   # ─── Signal sources ───────────────────────────────────────────────────
   prometheusURL: "http://prometheus-operated.monitoring:9090"
 
+  # Optional: override the PromQL if your service does not use the default
+  # metric names. $TARGET is replaced with targetDeployment. Omit to use the
+  # defaults (http_requests_total / http_request_duration_seconds_bucket).
+  # metrics:
+  #   latencyP99:        'histogram_quantile(0.99, rate(myapp_request_seconds_bucket{app="$TARGET"}[2m]))'
+  #   errorRate:         'sum(rate(myapp_requests_total{app="$TARGET",code=~"5.."}[2m])) / sum(rate(myapp_requests_total{app="$TARGET"}[2m])) * 100'
+  #   cpuUtilization:    'avg(rate(container_cpu_usage_seconds_total{pod=~"$TARGET-.*"}[2m])) * 100'
+  #   requestsPerSecond: 'sum(rate(myapp_requests_total{app="$TARGET"}[2m]))'
+
   logSource:
     type: loki                         # "loki" or "kafka"
     loki:

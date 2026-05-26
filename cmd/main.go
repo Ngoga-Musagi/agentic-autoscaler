@@ -147,7 +147,12 @@ func main() {
 	}
 
 	ctx := ctrl.SetupSignalHandler()
-	queryapi.NewServer(mgr.GetClient(), operatorNS).Start(ctx)
+	consoleCfg := queryapi.ConsoleConfig{
+		WriteEnabled: os.Getenv("CONSOLE_WRITE_ENABLED") == "true",
+		AuthToken:    os.Getenv("CONSOLE_AUTH_TOKEN"),
+		LoadgenURL:   os.Getenv("LOADGEN_URL"),
+	}
+	queryapi.NewServer(mgr.GetClient(), operatorNS, consoleCfg).Start(ctx)
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctx); err != nil {
