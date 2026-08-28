@@ -26,13 +26,67 @@ opts a single `Deployment` into agentic autoscaling. On every reconcile it:
 A `Deployment` is **only** managed when a matching `AgenticAutoscaler` CR targets
 it — there is no implicit or global behavior.
 
+## Project status & maturity
+
+This is a **vendor-neutral reference implementation** — reproducible on a laptop
+with Docker + `kind`, no cloud account required. It is not a supported product.
+Each capability below is tagged with its honest maturity so nothing here is
+overstated:
+
+- **Implemented** — code exists on the reconcile path.
+- **Tested** — covered by unit and/or envtest integration tests.
+- **Observed** — seen working end-to-end in a live `kind` run.
+- **Roadmap** — designed but not yet built, or built but not yet reachable.
+
+| Capability | Maturity |
+|------------|----------|
+| Prometheus + Loki signal collection → `SystemSnapshot` | Implemented · Tested |
+| Typed signal fusion + log-pattern matching → `FusedSignal` | Implemented · Tested |
+| Rule-based reasoning agent (offline, deterministic) | Implemented · Tested |
+| Cloud LLM providers (Anthropic, OpenAI) | Implemented · Tested |
+| Self-hosted Ollama provider | Implemented · Tested |
+| Fail-safe degradation (AI error → rules → `hold`) | Implemented · Tested |
+| Policy: min/max bounds + cooldown enforcement | Implemented · Tested |
+| HPA calibrated coexistence (nested bounds, read-only HPA) | Implemented · Tested |
+| Deployment scaler (merge-patch `spec.replicas` only) | Implemented · Tested |
+| Decision audit log (ConfigMap) | Implemented · Tested |
+| Grafana decision annotations | Implemented · Tested · Observed |
+| Natural-language decision explanations | Implemented · Tested |
+| Web console (explore / onboard / manage / load) | Implemented · Observed |
+| KEDA `ScaledObject` executor | Implemented · Tested — not yet selectable via `spec` (Roadmap) |
+| Detection across *N consecutive log windows* | Roadmap |
+| Custom log patterns via the CR spec | Roadmap |
+| Sustained-quiet scale-down (rule 5) across reconciles | Roadmap (in-memory timer only today) |
+| Log-pattern-driven end-to-end demo | Roadmap |
+| Quantitative A/B evidence (detection & scaling lead-time, restraint) | Roadmap |
+| PR CI + published multi-arch image | Roadmap |
+
 ## Getting Started
+
+**The one command:** on a machine with Docker + Helm, run
+
+```sh
+bash hack/bootstrap.sh
+```
+
+That is the single canonical entrypoint — it creates a local `kind` cluster and
+installs the whole stack (Prometheus, Loki, Grafana, the operator, a sample
+workload, and an `AgenticAutoscaler` CR). Everything else on this page is an
+**alternative or advanced** path: [Option B](#option-b--run-locally-without-a-container-advanced)
+runs the operator as a bare Go process, [Option C](#option-c--install-with-helm-advanced)
+installs via Helm, and `make dev-setup` is a thin wrapper around the same
+bootstrap. New here? Use the one command above.
 
 > [!WARNING]
 > This operator **patches `Deployment` replica counts**. Always start with
 > `dryRun: true` (the default) so decisions are logged but not applied.
 > A Deployment is only ever managed when an `AgenticAutoscaler` CR targets it —
 > there is no implicit or global behavior.
+
+> [!NOTE]
+> Calibrated HPA coexistence is the **recommended** mode for initial rollout, but
+> it is not a default — the CRD has no default for `spec.hpaCoexistence.mode`, so
+> set it explicitly (`owner` or `calibrated`) on each CR.
 
 ### Option A — Full stack on kind (recommended)
 
@@ -160,7 +214,7 @@ kind delete cluster --name agentic-autoscaler-dev
 
 ---
 
-### Option B — Run locally without a container (development)
+### Option B — Run locally without a container (advanced)
 
 The operator runs as a plain Go process on your machine, talking to the cluster
 through your kubeconfig. No image build required.
@@ -259,7 +313,7 @@ minikube delete
 
 ---
 
-### Option C — Install with Helm (staging / production)
+### Option C — Install with Helm (advanced)
 
 See [`docs/production-setup.md`](docs/production-setup.md) for the full rollout
 guide (dry-run → calibrated → owner progression).
