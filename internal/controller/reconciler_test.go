@@ -575,3 +575,37 @@ func TestReconcile_DeploymentNamespaceFallsBackToCRNamespace(t *testing.T) {
 		t.Errorf("CurrentReplicas: want 4, got %d", updated.Status.CurrentReplicas)
 	}
 }
+
+// TestReconcile_EmptyNamespace_ScaleUp_PatchesDeployment exercises the *write*
+// path with an empty spec.Namespace (T2.1). Unlike the hold-decision test above,
+// a scale-up reaches the executor, which reads spec.Namespace directly. Before
+// the fix the executor received "" and the Deployment lookup failed, so the scale
+// silently errored; after the fix the controller resolves the namespace on the
+// spec so the Deployment is patched.
+func TestReconcile_EmptyNamespace_ScaleUp_PatchesDeployment(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("autoscaler", "production", "api")
+	aa.Spec.Namespace = "" // omitted — must resolve to the CR namespace on the write path
+	deploy := makeDeployment("api", "production", 4)
+
+	scaleUp := reasoning.ScaleDecision{
+		Action:         "scale-up",
+		TargetReplicas: 8,
+		Confidence:     0.9,
+		Reason:         "high load detected",
+		Timestamp:      newTimestamp(time.Now()),
+	}
+	rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, scaleUp)
+
+	if _, err := rec.Reconcile(context.Background(), reconcileRequest("production", "autoscaler")); err != nil {
+		t.Fatalf("Reconcile: want nil with empty spec.namespace on scale-up, got %v", err)
+	}
+
+	updatedDeploy := &appsv1.Deployment{}
+	if err := rec.Get(context.Background(), types.NamespacedName{Namespace: "production", Name: "api"}, updatedDeploy); err != nil {
+		t.Fatalf("Get Deployment: %v", err)
+	}
+	if updatedDeploy.Spec.Replicas == nil || *updatedDeploy.Spec.Replicas != 8 {
+		t.Errorf("Spec.Replicas: want 8 (scaled with resolved namespace), got %v", updatedDeploy.Spec.Replicas)
+	}
+}

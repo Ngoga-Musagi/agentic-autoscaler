@@ -104,6 +104,12 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if deployNS == "" {
 		deployNS = aa.Namespace
 	}
+	// Resolve the namespace on the spec itself so every downstream consumer sees
+	// it — the policy enforcer (HPA lookup default) and the scaler executor both
+	// read spec.Namespace directly. Without this, a CR that omits spec.namespace
+	// would default the read path here but pass an empty namespace to Execute,
+	// causing the Deployment lookup to fail silently in namespace "".
+	aa.Spec.Namespace = deployNS
 
 	// Fetch the live Deployment to capture the current replica count needed
 	// by the reasoning engine and the status update.
