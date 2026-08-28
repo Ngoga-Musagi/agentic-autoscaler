@@ -346,6 +346,108 @@ make uninstall
 make undeploy
 ```
 
+## Autoscaling Demo
+
+End-to-end walkthrough of driving real traffic at the sample service and watching
+the operator scale it **up** (load climbs) and back **down** (load stops). Assumes
+the full stack from [Option A](#option-a--full-stack-on-kind-recommended) is
+running.
+
+### 1. Bring the demo up with the Load tab enabled
+
+The console's **Load** tab and write actions are **off by default** (security:
+write mode is opt-in). The bootstrap flag turns them on and deploys the load
+generator in one shot:
+
+```sh
+WITH_LOADGEN=1 bash hack/bootstrap.sh
+```
+
+> [!IMPORTANT]
+> A later **plain** `bash hack/bootstrap.sh` resets the console flags back to the
+> chart defaults (write off, no load generator), which **hides the Load tab again**
+> even though the load-generator workload may still be running. Always re-run with
+> `WITH_LOADGEN=1` to keep the demo wired up.
+
+### 2. Enable the Load tab on an already-running cluster
+
+If the stack is already up and the Load tab is missing, flip the two console flags
+without rebuilding the image (`--reuse-values` preserves your AI key and all other
+settings):
+
+```sh
+helm upgrade agentic-autoscaler deploy/helm -n agentic-autoscaler-system --reuse-values \
+  --set console.writeEnabled=true \
+  --set console.loadgenURL=http://loadgen.loadgen.svc.cluster.local:8080
+
+kubectl -n agentic-autoscaler-system rollout status \
+  deploy/agentic-autoscaler-agentic-autoscaler
+```
+
+Verify the served config — the Load tab appears only when `loadgenEnabled` is true:
+
+```sh
+kubectl -n agentic-autoscaler-system run cfgcheck --rm -i --restart=Never \
+  --image=curlimages/curl:8.7.1 --command -- \
+  curl -s http://agentic-autoscaler-agentic-autoscaler:8090/api/config
+# → {"writeEnabled":true,"authRequired":false,"loadgenEnabled":true}
+```
+
+### 3. Open the console and switch to live scaling
+
+```sh
+bash hack/port-forward.sh        # Terminal 2 — keep open
+```
+
+Open http://localhost:8090 and **hard-refresh (Ctrl-Shift-R)** to clear cached JS —
+the **Load** tab should now be visible.
+
+By default the sample CR runs `dryRun: true`, so decisions are logged but replicas
+**do not change**. To see real scaling, flip it to live:
+
+```sh
+kubectl -n production patch agenticautoscaler payment-service-autoscaler \
+  --type merge -p '{"spec":{"dryRun":false}}'
+```
+
+> [!WARNING]
+> `dryRun: false` lets the operator **patch replica counts**. The sample CR is in
+> `calibrated` mode (nested within HPA bounds, min 3 / max 18). If a matching HPA
+> exists it acts as a safety net; see
+> [.claude/rules/hpa-coexistence.md](.claude/rules/hpa-coexistence.md).
+
+### 4. Drive load and watch it react
+
+From the **Load** tab: set an RPS, press **Start**, then open the **Autoscalers**
+tab to watch replicas climb; press **Stop** to watch them fall after cooldown.
+
+Or from the terminal:
+
+```sh
+make load-up RPS=300                                  # sustained 300 rps
+kubectl -n production get deploy payment-service -w   # watch replicas climb
+make load-down                                        # stop; replicas fall after cooldown
+
+# Shape traffic to trigger the deterministic rules:
+make load-up RPS=300 ERRPCT=15                        # error rate > 10%
+make load-up RPS=300 DELAYMS=2500                     # p99 latency > 2s
+
+# One-shot up→hold→down cycle:
+RPS=300 HOLD=240 bash hack/loadtest.sh
+```
+
+### Troubleshooting: the Load tab is missing
+
+| Check | Command | Expected |
+|-------|---------|----------|
+| Console config | the `curl …/api/config` in step 2 | `loadgenEnabled:true` |
+| Operator env | `kubectl -n agentic-autoscaler-system get deploy -o jsonpath='{range .items[*].spec.template.spec.containers[*].env[*]}{.name}={.value}{"\n"}{end}'` | `CONSOLE_WRITE_ENABLED=true`, `LOADGEN_URL=…` |
+| Load generator | `kubectl -n loadgen get deploy,svc` | `loadgen` Deployment + Service present |
+
+If `loadgenEnabled` is false, the flags were reset — re-apply step 2. If the env
+vars are correct but the tab is still hidden, the browser cached the old console
+JS: **hard-refresh (Ctrl-Shift-R)**.
+
 ## Project Distribution
 
 Following are the steps to build the installer and distribute this project to users.
