@@ -45,11 +45,11 @@ const minRequeueInterval = 30 * time.Second
 // AgenticAutoscalerReconciler reconciles a AgenticAutoscaler object.
 type AgenticAutoscalerReconciler struct {
 	client.Client
-	Scheme         *runtime.Scheme
+	Scheme          *runtime.Scheme
 	SignalCollector SignalCollector
-	Policy         *policy.Enforcer
-	Scaler         scaler.Scaler
-	Observability  observability.Recorder
+	Policy          *policy.Enforcer
+	Scaler          scaler.Scaler
+	Observability   observability.Recorder
 	// Grafana is optional. When non-nil, a visual annotation is pushed to
 	// Grafana for every real (non-hold, non-dry-run) scale action.
 	Grafana *observability.GrafanaClient
@@ -72,7 +72,7 @@ func NewReconciler(c client.Client, scheme *runtime.Scheme) *AgenticAutoscalerRe
 	return &AgenticAutoscalerReconciler{
 		Client:          c,
 		Scheme:          scheme,
-		SignalCollector:  NewDefaultSignalCollector(),
+		SignalCollector: NewDefaultSignalCollector(),
 		Policy:          policy.NewEnforcer(&k8sHPAReader{client: c}),
 		Scaler:          scaler.NewExecutor(c),
 		Observability:   observability.NewConfigMapRecorder(c),
@@ -139,6 +139,22 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// 3. Fuse signals into a correlated FusedSignal.
 	fused := fusion.Correlate(snapshot)
 
+	// Advance the consecutive-window counter for THIS reconcile: a window with
+	// any matched log pattern continues the streak, a clean window resets it.
+	// The value must include the current window so the sustained scale-up rules
+	// can fire on the reconcile that reaches the threshold.
+	consecutiveWindows := aa.Status.ConsecutivePatternWindows
+	if len(fused.MatchedPatterns) > 0 {
+		consecutiveWindows++
+	} else {
+		consecutiveWindows = 0
+	}
+	// Effective threshold; treat an unset (zero) value as 1 for back-compat.
+	windowThreshold := aa.Spec.Detection.ConsecutiveWindows
+	if windowThreshold < 1 {
+		windowThreshold = 1
+	}
+
 	// 4. Build a fresh Agent each reconcile — it needs the live replica count
 	// which changes across reconcile cycles.
 	agent := r.NewAgent(reasoning.Config{
@@ -151,6 +167,11 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		// count), so an in-memory timer would reset each time; the durable
 		// anchor lives on the CR status instead.
 		CleanSince: aa.Status.LastCleanSince,
+		// Sustained-pattern gate for scale-up rules 2 and 4. The counter is
+		// carried on the CR status (like CleanSince) so it survives the agent
+		// being rebuilt every reconcile.
+		ConsecutivePatternWindows:  consecutiveWindows,
+		ConsecutiveWindowThreshold: windowThreshold,
 	})
 	decision, err := agent.Decide(ctx, fused)
 	if err != nil {
@@ -210,6 +231,9 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		now := metav1.Now()
 		aa.Status.LastCleanSince = &now
 	}
+	// Persist the consecutive-window counter computed above so the streak
+	// survives into the next reconcile.
+	aa.Status.ConsecutivePatternWindows = consecutiveWindows
 	if didScale {
 		aa.Status.LastScaleTime = decision.Timestamp
 		aa.Status.CurrentReplicas = decision.TargetReplicas

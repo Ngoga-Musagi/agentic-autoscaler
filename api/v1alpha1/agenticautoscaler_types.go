@@ -125,6 +125,21 @@ type MetricQueries struct {
 	RequestsPerSecond string `json:"requestsPerSecond,omitempty"`
 }
 
+// DetectionConfig tunes how log-pattern signals are interpreted across
+// reconcile windows before they drive a scaling decision.
+type DetectionConfig struct {
+	// ConsecutiveWindows is the number of consecutive reconcile windows a
+	// sustained log pattern (e.g. connection-pool-exhausted) must persist
+	// before the sustained scale-up rules fire. The default of 1 preserves the
+	// original single-window behaviour; the timeout-storm demo sets 3 to match
+	// the "across 3 consecutive log windows" annotation. Emergency signals such
+	// as OOMKilled are never gated by this counter.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
+	ConsecutiveWindows int32 `json:"consecutiveWindows,omitempty"`
+}
+
 // AgenticAutoscalerSpec defines the desired state of AgenticAutoscaler.
 type AgenticAutoscalerSpec struct {
 	// TargetDeployment is the name of the Deployment this CR manages.
@@ -177,6 +192,11 @@ type AgenticAutoscalerSpec struct {
 	// Observability configures Grafana annotation emission for decision audit trails.
 	// +optional
 	Observability ObservabilityConfig `json:"observability,omitempty"`
+
+	// Detection tunes cross-window log-pattern persistence before a scale
+	// decision is taken. Omitting it preserves single-window behaviour.
+	// +optional
+	Detection DetectionConfig `json:"detection,omitempty"`
 }
 
 // AgenticAutoscalerStatus defines the observed state of AgenticAutoscaler.
@@ -210,6 +230,13 @@ type AgenticAutoscalerStatus struct {
 	// patterns are currently active (or were on the last reconcile).
 	// +optional
 	LastCleanSince *metav1.Time `json:"lastCleanSince,omitempty"`
+
+	// ConsecutivePatternWindows counts how many consecutive reconciles have seen
+	// at least one matched log pattern. It backs spec.detection.consecutiveWindows:
+	// the sustained scale-up rules fire only once this counter reaches the
+	// configured threshold. It resets to 0 on the first pattern-free reconcile.
+	// +optional
+	ConsecutivePatternWindows int32 `json:"consecutivePatternWindows,omitempty"`
 }
 
 //+kubebuilder:object:root=true

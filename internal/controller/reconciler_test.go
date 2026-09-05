@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,12 +109,12 @@ func makeReconciler(
 	fc := builder.WithRuntimeObjects(rObjs...).Build()
 
 	rec := &AgenticAutoscalerReconciler{
-		Client:         fc,
-		Scheme:         scheme,
+		Client:          fc,
+		Scheme:          scheme,
 		SignalCollector: &staticSignalCollector{},
-		Policy:         policy.NewEnforcer(&noopHPAReader{}),
-		Scaler:         scaler.NewExecutor(fc),
-		Observability:  observability.NewNoopRecorder(),
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
 		NewAgent: func(_ reasoning.Config) reasoning.Agent {
 			return &fixedAgent{decision: decision}
 		},
@@ -261,12 +262,12 @@ func TestReconcile_CRNotFound_ReturnsNil(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(s).Build()
 
 	rec := &AgenticAutoscalerReconciler{
-		Client:         fc,
-		Scheme:         s,
+		Client:          fc,
+		Scheme:          s,
 		SignalCollector: &staticSignalCollector{},
-		Policy:         policy.NewEnforcer(&noopHPAReader{}),
-		Scaler:         scaler.NewExecutor(fc),
-		Observability:  observability.NewNoopRecorder(),
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
 		NewAgent: func(_ reasoning.Config) reasoning.Agent {
 			return &fixedAgent{decision: reasoning.HoldDecision("hold")}
 		},
@@ -292,12 +293,12 @@ func TestReconcile_DeploymentNotFound_RequeusWith30s(t *testing.T) {
 		Build()
 
 	rec := &AgenticAutoscalerReconciler{
-		Client:         fc,
-		Scheme:         s,
+		Client:          fc,
+		Scheme:          s,
 		SignalCollector: &staticSignalCollector{},
-		Policy:         policy.NewEnforcer(&noopHPAReader{}),
-		Scaler:         scaler.NewExecutor(fc),
-		Observability:  observability.NewNoopRecorder(),
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
 		NewAgent: func(_ reasoning.Config) reasoning.Agent {
 			return &fixedAgent{decision: reasoning.HoldDecision("hold")}
 		},
@@ -324,12 +325,12 @@ func TestReconcile_SignalCollectionFailure_RequeusWith30s(t *testing.T) {
 		Build()
 
 	rec := &AgenticAutoscalerReconciler{
-		Client:         fc,
-		Scheme:         s,
+		Client:          fc,
+		Scheme:          s,
 		SignalCollector: &staticSignalCollector{err: &fakeCollectorError{}},
-		Policy:         policy.NewEnforcer(&noopHPAReader{}),
-		Scaler:         scaler.NewExecutor(fc),
-		Observability:  observability.NewNoopRecorder(),
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
 		NewAgent: func(_ reasoning.Config) reasoning.Agent {
 			return &fixedAgent{decision: reasoning.HoldDecision("hold")}
 		},
@@ -372,12 +373,12 @@ func TestReconcile_CooldownActive_DecisionBecomesHold(t *testing.T) {
 		Build()
 
 	rec := &AgenticAutoscalerReconciler{
-		Client:         fc,
-		Scheme:         s,
+		Client:          fc,
+		Scheme:          s,
 		SignalCollector: &staticSignalCollector{},
-		Policy:         policy.NewEnforcer(&noopHPAReader{}),
-		Scaler:         scaler.NewExecutor(fc),
-		Observability:  observability.NewNoopRecorder(),
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
 		NewAgent: func(_ reasoning.Config) reasoning.Agent {
 			return &fixedAgent{decision: scaleUp}
 		},
@@ -484,7 +485,7 @@ func TestReconcile_AuditConfigMapCreated(t *testing.T) {
 	rec := &AgenticAutoscalerReconciler{
 		Client:          fc,
 		Scheme:          s,
-		SignalCollector:  &staticSignalCollector{},
+		SignalCollector: &staticSignalCollector{},
 		Policy:          policy.NewEnforcer(&noopHPAReader{}),
 		Scaler:          scaler.NewExecutor(fc),
 		Observability:   observability.NewConfigMapRecorder(fc),
@@ -719,5 +720,134 @@ func TestReconcile_DurableQuietWindow_ScaleDownFires(t *testing.T) {
 	_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "my-service"}, updatedDeploy)
 	if updatedDeploy.Spec.Replicas == nil || *updatedDeploy.Spec.Replicas != 3 {
 		t.Errorf("Spec.Replicas: want 3 (min+1, rule 5 fired via durable timer), got %v", updatedDeploy.Spec.Replicas)
+	}
+}
+
+// ---- T3.1: consecutive log-window detection --------------------------------
+
+// TestReconcile_ConsecutiveWindows_CounterIncrementsAndResets pins the
+// controller's half of the gate: the status counter advances by one on each
+// reconcile with a matched pattern and resets to zero on a pattern-free window.
+func TestReconcile_ConsecutiveWindows_CounterIncrementsAndResets(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("autoscaler", "default", "my-service") // counter starts at 0
+	deploy := makeDeployment("my-service", "default", 5)
+
+	fc := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&scalingv1alpha1.AgenticAutoscaler{}).
+		WithRuntimeObjects(aa, deploy).
+		Build()
+
+	// Collector we can flip from pattern-present to clean between reconciles.
+	coll := &snapshotSignalCollector{snap: signals.SystemSnapshot{
+		LogEntries: []signals.LogEntry{{Message: "connection pool exhausted after 30s"}},
+	}}
+	rec := &AgenticAutoscalerReconciler{
+		Client:          fc,
+		Scheme:          s,
+		SignalCollector: coll,
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
+		// Hold decision isolates the counter from any scaling side effects.
+		NewAgent: func(_ reasoning.Config) reasoning.Agent {
+			return &fixedAgent{decision: reasoning.HoldDecision("hold")}
+		},
+	}
+
+	windowCount := func() int32 {
+		u := &scalingv1alpha1.AgenticAutoscaler{}
+		_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "autoscaler"}, u)
+		return u.Status.ConsecutivePatternWindows
+	}
+	req := reconcileRequest("default", "autoscaler")
+
+	// Two pattern-present windows → counter 1 then 2.
+	for want := int32(1); want <= 2; want++ {
+		if _, err := rec.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		if got := windowCount(); got != want {
+			t.Fatalf("ConsecutivePatternWindows after window %d: want %d, got %d", want, want, got)
+		}
+	}
+
+	// A clean window resets the streak to 0.
+	coll.snap = signals.SystemSnapshot{}
+	if _, err := rec.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile (clean): %v", err)
+	}
+	if got := windowCount(); got != 0 {
+		t.Errorf("ConsecutivePatternWindows after clean window: want 0, got %d", got)
+	}
+}
+
+// TestReconcile_ConsecutiveWindows_GatesRule2ScaleUp proves the flagship
+// behaviour end-to-end with the real rule-based agent: with
+// detection.consecutiveWindows=3, a sustained pool-exhausted + high-latency
+// signal must NOT scale up on windows 1 and 2 and MUST scale up on window 3,
+// with a reason that names the gate.
+func TestReconcile_ConsecutiveWindows_GatesRule2ScaleUp(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("autoscaler", "default", "my-service")
+	aa.Spec.Detection.ConsecutiveWindows = 3
+	aa.Spec.CooldownSeconds = 0 // no prior scale; keep cooldown out of the way
+	deploy := makeDeployment("my-service", "default", 5)
+
+	fc := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&scalingv1alpha1.AgenticAutoscaler{}).
+		WithRuntimeObjects(aa, deploy).
+		Build()
+
+	// p99 > 2000ms AND a pool-exhausted log line → rule 2's non-window conditions
+	// are met every window; only the consecutive-window gate holds it back.
+	coll := &snapshotSignalCollector{snap: signals.SystemSnapshot{
+		Metrics:    signals.MetricSnapshot{LatencyP99Ms: 2500},
+		LogEntries: []signals.LogEntry{{Message: "connection pool exhausted after 30s"}},
+	}}
+	rec := &AgenticAutoscalerReconciler{
+		Client:          fc,
+		Scheme:          s,
+		SignalCollector: coll,
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
+		NewAgent:        reasoning.NewRuleBasedAgent,
+	}
+	req := reconcileRequest("default", "autoscaler")
+
+	replicas := func() int32 {
+		d := &appsv1.Deployment{}
+		_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "my-service"}, d)
+		if d.Spec.Replicas == nil {
+			return -1
+		}
+		return *d.Spec.Replicas
+	}
+
+	// Windows 1 and 2: gate not yet met → no scale.
+	for w := 1; w <= 2; w++ {
+		if _, err := rec.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("Reconcile window %d: %v", w, err)
+		}
+		if got := replicas(); got != 5 {
+			t.Fatalf("after window %d: want 5 (gate not met), got %d", w, got)
+		}
+	}
+
+	// Window 3: gate met → rule 2 fires, +50% of 5 = 8.
+	if _, err := rec.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile window 3: %v", err)
+	}
+	if got := replicas(); got != 8 {
+		t.Fatalf("after window 3: want 8 (gate met, rule 2 fired), got %d", got)
+	}
+
+	updated := &scalingv1alpha1.AgenticAutoscaler{}
+	_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "autoscaler"}, updated)
+	if !strings.Contains(updated.Status.LastDecisionReason, "across 3 consecutive windows") {
+		t.Errorf("reason should name the gate that applied, got %q", updated.Status.LastDecisionReason)
 	}
 }

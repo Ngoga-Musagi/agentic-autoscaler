@@ -18,6 +18,7 @@ package reasoning
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/fusion"
@@ -47,11 +48,16 @@ func NewRuleBasedAgent(cfg Config) Agent {
 //
 // Priority:
 //  1. oom-killed pattern                                    → scale up 50 %, confidence 0.95
-//  2. connection-pool-exhausted AND latency p99 > 2 000 ms  → scale up 50 %, confidence 0.90
+//  2. connection-pool-exhausted AND p99 > 2 000 ms AND gate → scale up 50 %, confidence 0.90
 //  3. error rate > 10 %                                     → scale up 30 %, confidence 0.80
-//  4. circuit-breaker-open pattern                          → scale up 30 %, confidence 0.70
+//  4. circuit-breaker-open pattern AND gate                 → scale up 30 %, confidence 0.70
 //  5. SeverityScore == 0 AND CPU < 20 % AND quiet ≥ 15 min  → scale down to min+1, confidence 0.60
 //  6. default                                               → hold
+//
+// "gate" is the consecutive-window requirement: the sustained scale-up rules
+// (2 and 4) fire only once a qualifying log pattern has persisted across
+// cfg.ConsecutiveWindowThreshold reconciles. The emergency OOM rule (1) and the
+// metric-driven error-rate rule (3) are never gated.
 func (r *RuleBasedAgent) Decide(ctx context.Context, s fusion.FusedSignal) (ScaleDecision, error) {
 	d, err := r.decide(ctx, s)
 	if err != nil {
@@ -74,11 +80,13 @@ func (r *RuleBasedAgent) decide(_ context.Context, s fusion.FusedSignal) (ScaleD
 	}
 
 	// Rule 2: connection-pool exhaustion combined with elevated latency is a
-	// strong indicator that the current replica count cannot handle load.
-	if s.HasPattern("connection-pool-exhausted") && m.LatencyP99Ms > 2000 {
+	// strong indicator that the current replica count cannot handle load. It is
+	// gated on the consecutive-window counter so a single transient window does
+	// not trigger a scale-up when a sustained window is configured.
+	if s.HasPattern("connection-pool-exhausted") && m.LatencyP99Ms > 2000 && r.consecutiveWindowGateMet() {
 		target := scaleUpByFraction(cur, 0.50, r.cfg.MaxReplicas)
 		return ScaleUpDecision(cur, target, 0.90,
-			"connection pool exhausted with p99 latency spike"), nil
+			r.sustainedReason("connection pool exhausted with p99 latency spike")), nil
 	}
 
 	// Rule 3: high error rate means requests are actively failing; more capacity
@@ -90,11 +98,12 @@ func (r *RuleBasedAgent) decide(_ context.Context, s fusion.FusedSignal) (ScaleD
 	}
 
 	// Rule 4: an open circuit breaker means downstream calls are being shed;
-	// additional replicas can distribute the retry load.
-	if s.HasPattern("circuit-breaker-open") {
+	// additional replicas can distribute the retry load. Like rule 2 this is a
+	// sustained-pattern rule and is gated on the consecutive-window counter.
+	if s.HasPattern("circuit-breaker-open") && r.consecutiveWindowGateMet() {
 		target := scaleUpByFraction(cur, 0.30, r.cfg.MaxReplicas)
 		return ScaleUpDecision(cur, target, 0.70,
-			"circuit breaker open, distributing retry load"), nil
+			r.sustainedReason("circuit breaker open, distributing retry load")), nil
 	}
 
 	// Rule 5: release capacity conservatively only after a sustained quiet
@@ -122,4 +131,33 @@ func (r *RuleBasedAgent) decide(_ context.Context, s fusion.FusedSignal) (ScaleD
 // the window is never considered reached.
 func (r *RuleBasedAgent) cleanWindowReached() bool {
 	return r.cfg.CleanSince != nil && time.Since(r.cfg.CleanSince.Time) >= cleanWindowDuration
+}
+
+// consecutiveWindowThreshold returns the effective sustained-window requirement,
+// treating an unset (zero) threshold as 1 so a CR created before the field
+// existed keeps the original single-window behaviour.
+func (r *RuleBasedAgent) consecutiveWindowThreshold() int32 {
+	if r.cfg.ConsecutiveWindowThreshold < 1 {
+		return 1
+	}
+	return r.cfg.ConsecutiveWindowThreshold
+}
+
+// consecutiveWindowGateMet reports whether a qualifying log pattern has been
+// present for at least the configured number of consecutive reconcile windows.
+// With the default threshold of 1 it is always satisfied when a pattern is
+// present this window, preserving the original immediate behaviour.
+func (r *RuleBasedAgent) consecutiveWindowGateMet() bool {
+	return r.cfg.ConsecutivePatternWindows >= r.consecutiveWindowThreshold()
+}
+
+// sustainedReason annotates a scale-up reason with the consecutive-window count,
+// but only when the gate is actually in force (threshold > 1). At the default
+// threshold of 1 the base reason is returned unchanged, so the decision never
+// claims "across N consecutive windows" when no multi-window gate applied.
+func (r *RuleBasedAgent) sustainedReason(base string) string {
+	if t := r.consecutiveWindowThreshold(); t > 1 {
+		return fmt.Sprintf("%s across %d consecutive windows", base, t)
+	}
+	return base
 }
