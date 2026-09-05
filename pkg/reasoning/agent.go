@@ -99,6 +99,12 @@ type Config struct {
 
 	// MaxReplicas is the upper bound from the AgenticAutoscaler spec.
 	MaxReplicas int32
+
+	// CleanSince is when log patterns last cleared, supplied by the controller
+	// from status.lastCleanSince. It carries the sustained-quiet timer across
+	// reconciles so the scale-down rule survives the controller rebuilding the
+	// agent every cycle. Nil means patterns are currently active.
+	CleanSince *metav1.Time
 }
 
 // NewAgent returns the Agent implementation selected by cfg.Provider.

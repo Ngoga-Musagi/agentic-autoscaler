@@ -29,16 +29,12 @@ const cleanWindowDuration = 15 * time.Minute
 // It requires no external API calls and is always available as a last-resort
 // fallback when cloud or self-hosted AI providers are unreachable.
 //
-// The agent is intentionally stateful: noPatternSince tracks when log patterns
-// were last observed so that the scale-down rule can enforce a quiet window.
-// The controller must hold the same agent instance across reconcile cycles —
-// do not recreate it on every call to NewRuleBasedAgent.
+// The agent is stateless: the sustained-quiet timer for the scale-down rule is
+// carried in cfg.CleanSince, which the controller persists on the CR status and
+// re-supplies every reconcile. This lets the quiet window survive the controller
+// rebuilding the agent on each cycle (it must, to pick up the live replica count).
 type RuleBasedAgent struct {
 	cfg Config
-
-	// noPatternSince is the wall-clock time at which the last matched pattern
-	// disappeared. Zero means patterns are currently active (or we just started).
-	noPatternSince time.Time
 }
 
 // NewRuleBasedAgent returns a RuleBasedAgent configured with the bounds from cfg.
@@ -68,10 +64,6 @@ func (r *RuleBasedAgent) Decide(ctx context.Context, s fusion.FusedSignal) (Scal
 func (r *RuleBasedAgent) decide(_ context.Context, s fusion.FusedSignal) (ScaleDecision, error) {
 	m := s.Snapshot.Metrics
 	cur := r.cfg.CurrentReplicas
-
-	// Maintain the "no patterns since" timer before evaluating any rule so the
-	// clock starts immediately when the last pattern clears.
-	r.updatePatternTimer(len(s.MatchedPatterns) > 0)
 
 	// Rule 1: OOM kills are always an emergency — scale before the pod is
 	// restarted again and hits the same wall.
@@ -124,23 +116,10 @@ func (r *RuleBasedAgent) decide(_ context.Context, s fusion.FusedSignal) (ScaleD
 	return hold("no action threshold met")
 }
 
-// updatePatternTimer advances the internal quiet-window clock.
-// Called once per Decide invocation before any rule is evaluated.
-func (r *RuleBasedAgent) updatePatternTimer(hasPatterns bool) {
-	if hasPatterns {
-		// Patterns are active: reset the clock so the quiet window must restart
-		// from scratch the next time conditions clear.
-		r.noPatternSince = time.Time{}
-		return
-	}
-	if r.noPatternSince.IsZero() {
-		// First reconcile with no patterns: start the clock now.
-		r.noPatternSince = time.Now()
-	}
-}
-
-// cleanWindowReached reports whether the quiet window has been sustained long
-// enough to trigger a conservative scale-down.
+// cleanWindowReached reports whether the quiet window carried in cfg.CleanSince
+// has been sustained long enough to trigger a conservative scale-down. A nil
+// CleanSince means patterns are active (or the window has not yet started), so
+// the window is never considered reached.
 func (r *RuleBasedAgent) cleanWindowReached() bool {
-	return !r.noPatternSince.IsZero() && time.Since(r.noPatternSince) >= cleanWindowDuration
+	return r.cfg.CleanSince != nil && time.Since(r.cfg.CleanSince.Time) >= cleanWindowDuration
 }

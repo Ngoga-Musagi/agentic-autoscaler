@@ -6,9 +6,18 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/fusion"
 	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/signals"
 )
+
+// cleanSince returns a *metav1.Time set d before now — the durable quiet-window
+// anchor the controller supplies to the agent via Config.CleanSince.
+func cleanSince(d time.Duration) *metav1.Time {
+	t := metav1.NewTime(time.Now().Add(-d))
+	return &t
+}
 
 // ---- test helpers ----------------------------------------------------------
 
@@ -62,8 +71,8 @@ func severityAndScore(name string) (string, float64) {
 	}
 }
 
-// newAgent returns a *RuleBasedAgent (concrete type) so tests can set unexported
-// fields like noPatternSince without going through the Agent interface.
+// newAgent returns a *RuleBasedAgent (concrete type) so tests can set the
+// unexported cfg (e.g. cfg.CleanSince) without going through the Agent interface.
 func newAgent(cfg Config) *RuleBasedAgent {
 	return &RuleBasedAgent{cfg: cfg}
 }
@@ -173,7 +182,7 @@ func TestRuleBasedAgent_Decide(t *testing.T) {
 				LatencyP99Ms: 40, ErrorRatePct: 0, CPUUtilPct: 12,
 			}),
 			setupAgent: func(a *RuleBasedAgent) {
-				a.noPatternSince = time.Now().Add(-20 * time.Minute)
+				a.cfg.CleanSince = cleanSince(20 * time.Minute)
 			},
 			wantAction:       "scale-down",
 			wantTarget:       3, // min+1 = 2+1
@@ -187,7 +196,7 @@ func TestRuleBasedAgent_Decide(t *testing.T) {
 				LatencyP99Ms: 40, ErrorRatePct: 0, CPUUtilPct: 12,
 			}),
 			setupAgent: func(a *RuleBasedAgent) {
-				a.noPatternSince = time.Now().Add(-5 * time.Minute)
+				a.cfg.CleanSince = cleanSince(5 * time.Minute)
 			},
 			wantAction: "hold",
 		},
@@ -198,7 +207,7 @@ func TestRuleBasedAgent_Decide(t *testing.T) {
 				LatencyP99Ms: 40, CPUUtilPct: 35,
 			}),
 			setupAgent: func(a *RuleBasedAgent) {
-				a.noPatternSince = time.Now().Add(-20 * time.Minute)
+				a.cfg.CleanSince = cleanSince(20 * time.Minute)
 			},
 			wantAction: "hold",
 		},
@@ -209,7 +218,7 @@ func TestRuleBasedAgent_Decide(t *testing.T) {
 				LatencyP99Ms: 40, CPUUtilPct: 10,
 			}),
 			setupAgent: func(a *RuleBasedAgent) {
-				a.noPatternSince = time.Now().Add(-20 * time.Minute)
+				a.cfg.CleanSince = cleanSince(20 * time.Minute)
 			},
 			wantAction: "hold", // target would be 3, cur is 3 — nothing to do
 		},
@@ -254,35 +263,44 @@ func TestRuleBasedAgent_Decide(t *testing.T) {
 	}
 }
 
-// ---- quiet-window timer tests ----------------------------------------------
+// ---- quiet-window timer contract -------------------------------------------
+//
+// The quiet-window timer now lives on the CR status (supplied to the agent via
+// Config.CleanSince) and is advanced by the controller — not inside the agent.
+// These tests pin the agent's half of that contract: it reads CleanSince but
+// never mutates it, and without a durable CleanSince it can never scale down.
 
-func TestRuleBasedAgent_QuietWindowTimer_ResetsOnPattern(t *testing.T) {
-	agent := newAgent(baseConfig)
-	// Prime the clock as if we've been quiet for 20 minutes.
-	agent.noPatternSince = time.Now().Add(-20 * time.Minute)
-
-	// Reconcile with an active pattern — timer must reset.
-	_, _ = agent.Decide(context.Background(), makeSignal(
-		signals.MetricSnapshot{CPUUtilPct: 10},
-		"upstream-timeout",
-	))
-
-	if !agent.noPatternSince.IsZero() {
-		t.Errorf("noPatternSince should be zero after a reconcile with patterns, got %v", agent.noPatternSince)
+func TestRuleBasedAgent_NilCleanSince_NeverScalesDown(t *testing.T) {
+	// A fresh agent each reconcile (as the controller builds it) with no durable
+	// CleanSince must never scale down, no matter how many clean reconciles pass.
+	// This is exactly the bug the durable status field fixes — with an in-memory
+	// timer reset every reconcile, rule 5 was unreachable.
+	clean := makeSignal(signals.MetricSnapshot{CPUUtilPct: 10, LatencyP99Ms: 40})
+	for i := 0; i < 3; i++ {
+		agent := NewRuleBasedAgent(baseConfig) // CleanSince nil
+		got, err := agent.Decide(context.Background(), clean)
+		if err != nil {
+			t.Fatalf("Decide: %v", err)
+		}
+		if got.Action == "scale-down" {
+			t.Fatalf("reconcile %d: fresh agent with nil CleanSince must not scale down, got %q", i, got.Action)
+		}
 	}
 }
 
-func TestRuleBasedAgent_QuietWindowTimer_StartsOnFirstCleanReconcile(t *testing.T) {
+func TestRuleBasedAgent_DoesNotMutateCleanSince(t *testing.T) {
+	// The agent reads CleanSince but must not change it — the controller owns the
+	// timer. Deciding on a pattern-bearing signal must leave cfg.CleanSince intact.
+	set := cleanSince(20 * time.Minute)
 	agent := newAgent(baseConfig)
-	// noPatternSince is zero (never been set).
-	before := time.Now()
-	_, _ = agent.Decide(context.Background(), makeSignal(
-		signals.MetricSnapshot{CPUUtilPct: 80},
-	))
-	after := time.Now()
+	agent.cfg.CleanSince = set
 
-	if agent.noPatternSince.Before(before) || agent.noPatternSince.After(after) {
-		t.Errorf("noPatternSince should have been set to ~now, got %v", agent.noPatternSince)
+	_, _ = agent.Decide(context.Background(), makeSignal(
+		signals.MetricSnapshot{CPUUtilPct: 10}, "upstream-timeout",
+	))
+
+	if agent.cfg.CleanSince != set {
+		t.Errorf("agent must not mutate cfg.CleanSince; want %v, got %v", set, agent.cfg.CleanSince)
 	}
 }
 

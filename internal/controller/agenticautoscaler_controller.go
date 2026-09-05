@@ -25,6 +25,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -145,6 +146,11 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		MinReplicas:      aa.Spec.MinReplicas,
 		MaxReplicas:      aa.Spec.MaxReplicas,
 		TargetDeployment: aa.Spec.TargetDeployment,
+		// Carry the sustained-quiet timer across reconciles so rule 5 can fire.
+		// The controller rebuilds the agent every cycle (for the live replica
+		// count), so an in-memory timer would reset each time; the durable
+		// anchor lives on the CR status instead.
+		CleanSince: aa.Status.LastCleanSince,
 	})
 	decision, err := agent.Decide(ctx, fused)
 	if err != nil {
@@ -193,6 +199,17 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	aa.Status.LastDecisionReason = reason
 	aa.Status.ObservedGeneration = aa.Generation
 	aa.Status.HPACoexistenceStatus = hpaCoexistenceStatus(aa.Spec)
+
+	// Advance the sustained-quiet timer for the next reconcile: clear it while any
+	// pattern is active, and start it on the first pattern-free reconcile. This
+	// durable anchor (vs. an in-memory timer) is what lets rule 5's 15-minute
+	// quiet window survive the agent being rebuilt every reconcile.
+	if len(fused.MatchedPatterns) > 0 {
+		aa.Status.LastCleanSince = nil
+	} else if aa.Status.LastCleanSince == nil {
+		now := metav1.Now()
+		aa.Status.LastCleanSince = &now
+	}
 	if didScale {
 		aa.Status.LastScaleTime = decision.Timestamp
 		aa.Status.CurrentReplicas = decision.TargetReplicas

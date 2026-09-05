@@ -201,6 +201,15 @@ type AgenticAutoscalerStatus struct {
 	// ObservedGeneration is the .metadata.generation this status was produced from.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// LastCleanSince is when the most recent matched log pattern last cleared.
+	// It is the durable, cross-reconcile anchor for the sustained-quiet
+	// scale-down rule: the rule may fire only once the clean window has elapsed
+	// since this timestamp. The controller starts it on the first pattern-free
+	// reconcile and clears it whenever a pattern reappears. A nil value means
+	// patterns are currently active (or were on the last reconcile).
+	// +optional
+	LastCleanSince *metav1.Time `json:"lastCleanSince,omitempty"`
 }
 
 //+kubebuilder:object:root=true
