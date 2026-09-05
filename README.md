@@ -54,12 +54,12 @@ overstated:
 | Natural-language decision explanations | Implemented · Tested |
 | Web console (explore / onboard / manage / load) | Implemented · Observed |
 | KEDA `ScaledObject` executor | Implemented · Tested — not yet selectable via `spec` (Roadmap) |
-| Detection across *N consecutive log windows* | Roadmap |
-| Custom log patterns via the CR spec | Roadmap |
-| Sustained-quiet scale-down (rule 5) across reconciles | Roadmap (in-memory timer only today) |
+| Detection across *N consecutive log windows* | Implemented · Tested |
+| Custom log patterns via the CR spec | Implemented · Tested |
+| Sustained-quiet scale-down (rule 5) across reconciles | Implemented · Tested |
 | Log-pattern-driven end-to-end demo | Roadmap |
 | Quantitative A/B evidence (detection & scaling lead-time, restraint) | Roadmap |
-| PR CI + published multi-arch image | Roadmap |
+| PR CI (build/test/lint/smoke) + multi-arch release workflow | Workflows added — first green run pending a PR/tag |
 
 ## Getting Started
 
