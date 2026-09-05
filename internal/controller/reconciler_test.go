@@ -851,3 +851,103 @@ func TestReconcile_ConsecutiveWindows_GatesRule2ScaleUp(t *testing.T) {
 		t.Errorf("reason should name the gate that applied, got %q", updated.Status.LastDecisionReason)
 	}
 }
+
+// ---- T3.2: custom / extensible log patterns --------------------------------
+
+// TestReconcile_CustomLogPattern_DrivesScaleUp proves a custom pattern reaches a
+// scaling decision end-to-end: the CR overrides the built-in
+// connection-pool-exhausted regex with its own string, and a log line matching
+// only that custom regex (plus high latency) makes the real rule-based agent
+// fire rule 2.
+func TestReconcile_CustomLogPattern_DrivesScaleUp(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("autoscaler", "default", "my-service")
+	aa.Spec.CooldownSeconds = 0
+	aa.Spec.LogPatterns = []scalingv1alpha1.LogPatternSpec{
+		{Name: "connection-pool-exhausted", Regex: `POOL DRAINED`, Severity: "critical", Score: 90},
+	}
+	deploy := makeDeployment("my-service", "default", 4)
+
+	fc := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&scalingv1alpha1.AgenticAutoscaler{}).
+		WithRuntimeObjects(aa, deploy).
+		Build()
+
+	// Only the custom regex matches this line; the built-in regex would not.
+	snap := signals.SystemSnapshot{
+		Metrics:    signals.MetricSnapshot{LatencyP99Ms: 2500},
+		LogEntries: []signals.LogEntry{{Message: "POOL DRAINED: no slots free"}},
+	}
+	rec := &AgenticAutoscalerReconciler{
+		Client:          fc,
+		Scheme:          s,
+		SignalCollector: &snapshotSignalCollector{snap: snap},
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
+		NewAgent:        reasoning.NewRuleBasedAgent,
+	}
+
+	if _, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler")); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	updatedDeploy := &appsv1.Deployment{}
+	_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "my-service"}, updatedDeploy)
+	if updatedDeploy.Spec.Replicas == nil || *updatedDeploy.Spec.Replicas != 6 {
+		t.Errorf("Spec.Replicas: want 6 (rule 2 fired via custom regex, +50%% of 4), got %v", updatedDeploy.Spec.Replicas)
+	}
+}
+
+// TestReconcile_InvalidCustomPattern_NonFatalAndReported proves the fail-safe
+// contract: an uncompilable custom pattern does not fail the reconcile, is
+// reported in status.logPatternWarnings, and the built-in patterns still run.
+func TestReconcile_InvalidCustomPattern_NonFatalAndReported(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("autoscaler", "default", "my-service")
+	aa.Spec.LogPatterns = []scalingv1alpha1.LogPatternSpec{
+		{Name: "broken", Regex: `[unclosed`, Severity: "warning", Score: 50},
+	}
+	deploy := makeDeployment("my-service", "default", 5)
+
+	fc := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&scalingv1alpha1.AgenticAutoscaler{}).
+		WithRuntimeObjects(aa, deploy).
+		Build()
+
+	// A built-in pattern still matches this line, proving fusion kept running.
+	snap := signals.SystemSnapshot{
+		LogEntries: []signals.LogEntry{{Message: "connection pool exhausted after 30s"}},
+	}
+	rec := &AgenticAutoscalerReconciler{
+		Client:          fc,
+		Scheme:          s,
+		SignalCollector: &snapshotSignalCollector{snap: snap},
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
+		NewAgent: func(_ reasoning.Config) reasoning.Agent {
+			return &fixedAgent{decision: reasoning.HoldDecision("hold")}
+		},
+	}
+
+	if _, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler")); err != nil {
+		t.Fatalf("Reconcile must not fail on an invalid custom pattern, got %v", err)
+	}
+
+	updated := &scalingv1alpha1.AgenticAutoscaler{}
+	_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "autoscaler"}, updated)
+	if len(updated.Status.LogPatternWarnings) != 1 {
+		t.Fatalf("LogPatternWarnings: want 1, got %d (%v)",
+			len(updated.Status.LogPatternWarnings), updated.Status.LogPatternWarnings)
+	}
+	if !strings.Contains(updated.Status.LogPatternWarnings[0], "broken") {
+		t.Errorf("warning should name the offending pattern, got %q", updated.Status.LogPatternWarnings[0])
+	}
+	// The built-in pattern still matched, so the quiet-window timer was cleared.
+	if updated.Status.LastCleanSince != nil {
+		t.Error("built-in patterns should still run: a matched pattern must clear LastCleanSince")
+	}
+}

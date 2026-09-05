@@ -136,8 +136,15 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{RequeueAfter: minRequeueInterval}, nil
 	}
 
-	// 3. Fuse signals into a correlated FusedSignal.
-	fused := fusion.Correlate(snapshot)
+	// 3. Fuse signals into a correlated FusedSignal, using the built-in patterns
+	// extended/overridden by any custom spec.logPatterns. Invalid custom patterns
+	// are skipped (fail-safe) and surfaced in status; fusion still runs on the
+	// remaining valid set.
+	patterns, patternWarnings := effectivePatterns(aa.Spec.LogPatterns)
+	if len(patternWarnings) > 0 {
+		logger.Info("skipped invalid custom log patterns", "warnings", patternWarnings)
+	}
+	fused := fusion.CorrelateWithPatterns(snapshot, patterns)
 
 	// Advance the consecutive-window counter for THIS reconcile: a window with
 	// any matched log pattern continues the streak, a clean window resets it.
@@ -234,6 +241,8 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Persist the consecutive-window counter computed above so the streak
 	// survives into the next reconcile.
 	aa.Status.ConsecutivePatternWindows = consecutiveWindows
+	// Surface any custom-pattern compile failures (nil clears stale warnings).
+	aa.Status.LogPatternWarnings = patternWarnings
 	if didScale {
 		aa.Status.LastScaleTime = decision.Timestamp
 		aa.Status.CurrentReplicas = decision.TargetReplicas
@@ -297,6 +306,46 @@ func (h *k8sHPAReader) GetHPA(
 		return nil, err
 	}
 	return hpa, nil
+}
+
+// effectivePatterns merges the custom patterns from spec.logPatterns onto the
+// built-in fusion.DefaultPatterns and returns the compiled set plus a warning
+// for every entry that failed to compile. A custom entry that reuses a built-in
+// name overrides it; an invalid entry is skipped (never fatal, per the fail-safe
+// invariant) with its error collected for status.logPatternWarnings.
+//
+// The translation from the CRD type to fusion.Pattern lives here, not in
+// pkg/fusion, so that package stays free of Kubernetes types.
+func effectivePatterns(specs []scalingv1alpha1.LogPatternSpec) ([]fusion.Pattern, []string) {
+	// Copy the defaults so the package-level slice is never mutated or aliased.
+	patterns := make([]fusion.Pattern, len(fusion.DefaultPatterns))
+	copy(patterns, fusion.DefaultPatterns)
+
+	if len(specs) == 0 {
+		return patterns, nil
+	}
+
+	indexByName := make(map[string]int, len(patterns))
+	for i, p := range patterns {
+		indexByName[p.Name] = i
+	}
+
+	var warnings []string
+	for _, lp := range specs {
+		// spec score is a 0–100 weight; fusion works in 0.0–1.0.
+		p, err := fusion.CompilePattern(lp.Name, lp.Regex, lp.Severity, float64(lp.Score)/100.0)
+		if err != nil {
+			warnings = append(warnings, err.Error())
+			continue
+		}
+		if idx, ok := indexByName[p.Name]; ok {
+			patterns[idx] = p // custom entry overrides the built-in of the same name
+		} else {
+			indexByName[p.Name] = len(patterns)
+			patterns = append(patterns, p)
+		}
+	}
+	return patterns, warnings
 }
 
 // patternNames extracts the Name field from each PatternMatch so the
