@@ -1,0 +1,275 @@
+name: CI
+
+# Runs on every pull request and on pushes to main so contributors get a green
+# (or red) check. Complements the existing Claude-review and scheduled workflows,
+# which do not build, test, or lint the code.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref to save runner time.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: build & test (go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.21", "1.22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+      - name: go build
+        run: go build ./...
+      - name: make test (unit + envtest integration)
+        # `make test` provisions envtest (KUBEBUILDER_ASSETS) and runs every
+        # package except e2e — including hack/localrun, which boots the full
+        # operator manager against a real apiserver and asserts a reconcile
+        # writes a decision. That is the end-to-end decision smoke.
+        run: make test
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          # Match the version pinned in the Makefile (GOLANGCI_LINT_VERSION).
+          version: v1.54.2
+          args: --timeout=5m
+
+  verify-generated:
+    name: verify generated artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache: true
+      - name: regenerate manifests + deepcopy
+        run: make manifests generate
+      - name: fail if regeneration changed anything
+        # Guards against a PR that edits api/v1alpha1 types without running
+        # `make manifests generate` — the CRD and deepcopy must stay in sync.
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::Generated artifacts are stale. Run 'make manifests generate' and commit the result."
+            exit 1
+          fi
+
+  docker-build:
+    name: docker build (operator image)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build operator image
+        run: docker build -t agentic-autoscaler:ci .
+
+  kind-smoke:
+    name: kind smoke (end-to-end decision)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache: true
+
+      - name: build operator + mockserver images
+        run: |
+          docker build -t agentic-autoscaler:ci .
+          docker build -f hack/mockserver/Dockerfile -t mockserver:ci .
+
+      - name: create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: kind-smoke
+
+      - name: load images into kind
+        run: |
+          kind load docker-image agentic-autoscaler:ci --name kind-smoke
+          kind load docker-image mockserver:ci --name kind-smoke
+
+      - name: install CRD
+        run: kubectl apply -f config/crd/bases/
+
+      - name: deploy operator, mock signals, target, and a dry-run CR
+        run: |
+          kubectl create namespace agentic-autoscaler-system
+          kubectl create namespace production
+
+          # Mock Prometheus + Loki (canned overloaded signals → pool-exhausted).
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: mockserver
+            namespace: agentic-autoscaler-system
+          spec:
+            replicas: 1
+            selector: { matchLabels: { app: mockserver } }
+            template:
+              metadata: { labels: { app: mockserver } }
+              spec:
+                containers:
+                  - name: mockserver
+                    image: mockserver:ci
+                    imagePullPolicy: Never
+                    ports: [{ containerPort: 9099 }]
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: mockserver
+            namespace: agentic-autoscaler-system
+          spec:
+            selector: { app: mockserver }
+            ports: [{ port: 9099, targetPort: 9099 }]
+          EOF
+
+          # Operator RBAC (cluster-scoped: watch AA + Deployments, read HPAs,
+          # write status, manage the audit ConfigMap).
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: operator
+            namespace: agentic-autoscaler-system
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          metadata:
+            name: agentic-autoscaler-smoke
+          rules:
+            - apiGroups: ["scaling.autoscaler.io"]
+              resources: ["agenticautoscalers", "agenticautoscalers/status"]
+              verbs: ["get", "list", "watch", "create", "update", "patch"]
+            - apiGroups: ["apps"]
+              resources: ["deployments"]
+              verbs: ["get", "list", "watch", "update", "patch"]
+            - apiGroups: ["autoscaling"]
+              resources: ["horizontalpodautoscalers"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: [""]
+              resources: ["configmaps"]
+              verbs: ["get", "list", "watch", "create", "update", "patch"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: agentic-autoscaler-smoke
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: agentic-autoscaler-smoke
+          subjects:
+            - kind: ServiceAccount
+              name: operator
+              namespace: agentic-autoscaler-system
+          EOF
+
+          # Operator Deployment (rule-based agent, no cloud key needed).
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: operator
+            namespace: agentic-autoscaler-system
+          spec:
+            replicas: 1
+            selector: { matchLabels: { app: operator } }
+            template:
+              metadata: { labels: { app: operator } }
+              spec:
+                serviceAccountName: operator
+                containers:
+                  - name: manager
+                    image: agentic-autoscaler:ci
+                    imagePullPolicy: Never
+                    env:
+                      - { name: AI_PROVIDER, value: "rules" }
+                      - { name: OPERATOR_NAMESPACE, value: "agentic-autoscaler-system" }
+          EOF
+
+          # Target Deployment + a dry-run CR pointing at the mock signals.
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: payment-service
+            namespace: production
+          spec:
+            replicas: 3
+            selector: { matchLabels: { app: payment-service } }
+            template:
+              metadata: { labels: { app: payment-service } }
+              spec:
+                containers:
+                  - name: main
+                    image: registry.k8s.io/pause:3.9
+          ---
+          apiVersion: scaling.autoscaler.io/v1alpha1
+          kind: AgenticAutoscaler
+          metadata:
+            name: payment-service-autoscaler
+            namespace: production
+          spec:
+            targetDeployment: payment-service
+            namespace: production
+            prometheusURL: "http://mockserver.agentic-autoscaler-system.svc:9099"
+            logSource:
+              type: loki
+              loki:
+                url: "http://mockserver.agentic-autoscaler-system.svc:9099"
+                query: '{app="payment-service"}'
+            minReplicas: 2
+            maxReplicas: 20
+            cooldownSeconds: 30
+            dryRun: true
+          EOF
+
+      - name: wait for the operator to become ready
+        run: |
+          kubectl -n agentic-autoscaler-system rollout status deploy/operator --timeout=180s
+          kubectl -n agentic-autoscaler-system rollout status deploy/mockserver --timeout=120s
+
+      - name: assert an end-to-end decision was recorded
+        run: |
+          # Poll the CR status for a decision reason written by a real reconcile
+          # (boot → watch → collect from mock → reason → status patch).
+          for i in $(seq 1 30); do
+            reason=$(kubectl -n production get agenticautoscaler payment-service-autoscaler \
+              -o jsonpath='{.status.lastDecisionReason}' 2>/dev/null || true)
+            if [ -n "$reason" ]; then
+              echo "✓ decision recorded: $reason"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::no decision was recorded within the timeout"
+          kubectl -n agentic-autoscaler-system logs deploy/operator --tail=100 || true
+          kubectl -n production get agenticautoscaler payment-service-autoscaler -o yaml || true
+          exit 1
+
+      - name: operator logs (always, for debugging)
+        if: always()
+        run: kubectl -n agentic-autoscaler-system logs deploy/operator --tail=200 || true
