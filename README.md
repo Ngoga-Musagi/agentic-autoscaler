@@ -58,7 +58,7 @@ overstated:
 | Custom log patterns via the CR spec | Implemented · Tested |
 | Sustained-quiet scale-down (rule 5) across reconciles | Implemented · Tested |
 | Log-pattern-driven end-to-end demo (timeout storm) | Implemented · Tested · Observed |
-| Quantitative A/B evidence (detection & scaling lead-time, restraint) | Roadmap |
+| Quantitative A/B evidence (scaling lead-time: HPA vs agentic, kind, n=1) | Implemented · Observed |
 | PR CI (build/test/lint/smoke) + multi-arch release workflow | Workflows added — first green run pending a PR/tag |
 
 ## Getting Started
