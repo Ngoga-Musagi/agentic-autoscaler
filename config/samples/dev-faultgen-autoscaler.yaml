@@ -1,0 +1,46 @@
+# Timeout-storm demo — AgenticAutoscaler for the faultgen workload.
+#
+# Pairs with deploy/faultgen/faultgen.yaml. When the fault control API is toggled
+# on (make storm-up), faultgen injects >2 s latency and emits
+# "connection pool exhausted" log lines; the operator fuses the Prometheus p99
+# signal with the Loki log pattern and fires rule 2 — a log-pattern-driven
+# scale-up, not an error-rate one.
+#
+# Starts in dryRun (safe): the operator records the scale-up decision + matched
+# pattern without changing replicas. Flip dryRun to false (make storm-live) to
+# see the Deployment actually scale.
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: faultgen-autoscaler
+  namespace: production
+  labels:
+    app.kubernetes.io/managed-by: agentic-autoscaler
+spec:
+  targetDeployment: faultgen           # scales deploy/faultgen in this namespace
+
+  prometheusURL: "http://prometheus-operated.monitoring:9090"
+  # faultgen runs multiple replicas, so the queries aggregate across pods into a
+  # single series (the default per-pod queries would return one series per pod;
+  # the operator reads the first). $TARGET is replaced with targetDeployment.
+  metrics:
+    latencyP99:        'histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="$TARGET"}[2m])) by (le))'
+    errorRate:         'sum(rate(http_requests_total{service="$TARGET",status=~"5.."}[2m])) / clamp_min(sum(rate(http_requests_total{service="$TARGET"}[2m])), 0.001) * 100'
+    requestsPerSecond: 'sum(rate(http_requests_total{service="$TARGET"}[2m]))'
+
+  logSource:
+    type: loki
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{namespace="production", app="faultgen"}'
+
+  minReplicas: 2
+  maxReplicas: 10
+  cooldownSeconds: 60
+
+  # Safe default: record decisions without executing. Set false to scale live.
+  dryRun: true
+
+  aiProvider:
+    provider: anthropic                 # runtime provider is set by AI_PROVIDER;
+    secretRef: "ai-provider-secret"     # rule 2 is deterministic (rule-based)

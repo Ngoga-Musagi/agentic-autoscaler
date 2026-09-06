@@ -1,0 +1,110 @@
+# faultgen — timeout-storm demo workload. DEMO / TESTING ONLY.
+#
+# faultgen is the deployment the operator scales in the flagship demo. It exposes
+# service-labelled Prometheus metrics and, when the fault control API is toggled
+# on, injects >2 s latency AND emits "connection pool exhausted" log lines — so
+# the operator's rule 2 fires from real metrics + real log ingestion (not from
+# anything faked inside the operator).
+#
+#   Build + load into kind:  make faultgen-image
+#   Deploy:                   kubectl apply -f deploy/faultgen/faultgen.yaml
+#   Control API reached at:   http://faultgen.production.svc.cluster.local:8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faultgen
+  namespace: production
+  labels:
+    app: faultgen
+    app.kubernetes.io/part-of: agentic-autoscaler
+    app.kubernetes.io/component: faultgen
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: faultgen
+  template:
+    metadata:
+      labels:
+        app: faultgen
+      annotations:
+        # Annotation-based scrape (matches the demo stack's podinfo target).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: faultgen
+          image: agentic-autoscaler-faultgen:dev
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            # Must equal metadata.name so metrics carry service="faultgen",
+            # matching the operator's $TARGET substitution.
+            - name: SERVICE_NAME
+              value: faultgen
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits:   { cpu: "1", memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: faultgen
+  namespace: production
+  labels:
+    app: faultgen
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  selector:
+    app: faultgen
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+# kube-prometheus-stack discovers targets via ServiceMonitor, not the
+# prometheus.io/scrape annotations above (kept only for annotation-based
+# Prometheus setups). This scrapes faultgen's /metrics so the operator's
+# default {service="faultgen"} queries resolve.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: faultgen
+  namespace: production
+  labels:
+    app: faultgen
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: faultgen
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

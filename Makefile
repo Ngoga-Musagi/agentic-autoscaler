@@ -76,6 +76,7 @@ KIND_CLUSTER ?= agentic-autoscaler-dev
 DEV_IMG      ?= agentic-autoscaler:dev
 DEV_NS       ?= agentic-autoscaler-system
 LOADGEN_IMG  ?= agentic-autoscaler-loadgen:dev
+FAULTGEN_IMG ?= agentic-autoscaler-faultgen:dev
 # Load generator knobs (override on the command line, e.g. make load-up RPS=400).
 LOAD_TARGET  ?= http://payment-service.production:9898
 RPS          ?= 200
@@ -214,6 +215,57 @@ load-down: ## Stop the load generator; replicas scale back down after cooldown.
 		curl -s -X POST http://loadgen.loadgen:8080/stop
 	@echo ""
 	@echo "✓ load stopped."
+
+# ── Timeout-storm demo (T4.1): log-pattern-driven scaling ────────────────────
+
+.PHONY: faultgen-image
+faultgen-image: ## Build the faultgen demo image and load it into kind.
+	docker build -f Dockerfile.faultgen -t $(FAULTGEN_IMG) .
+	kind load docker-image $(FAULTGEN_IMG) --name $(KIND_CLUSTER)
+	@echo "✓ Image $(FAULTGEN_IMG) loaded into kind."
+
+.PHONY: faultgen-deploy
+faultgen-deploy: ## Deploy the faultgen workload + its AgenticAutoscaler (DEMO ONLY).
+	kubectl apply -f deploy/faultgen/faultgen.yaml
+	kubectl apply -f config/samples/dev-faultgen-autoscaler.yaml
+	kubectl -n production rollout status deploy/faultgen --timeout=90s
+	@echo "✓ faultgen ready at http://faultgen.production.svc.cluster.local:8080"
+
+.PHONY: demo-timeout-storm
+demo-timeout-storm: faultgen-image faultgen-deploy loadgen-image loadgen-deploy ## Set up the full log-pattern-driven demo.
+	@echo ""
+	@echo "✓ Timeout-storm demo ready. Then:"
+	@echo "    make storm-up      # inject the storm: >2s latency + pool-exhausted logs"
+	@echo "    kubectl -n production get agenticautoscaler faultgen-autoscaler -o yaml   # see the decision"
+	@echo "    make storm-down    # clear the storm"
+	@echo "  Scaling is dry-run by default; run 'make storm-live' to let it scale for real."
+
+.PHONY: storm-up
+storm-up: ## Inject the timeout storm (all replicas) and drive traffic at faultgen.
+	# Set the fault via env + rollout so EVERY replica faults from boot — including
+	# any the operator scales up (a per-pod API toggle would miss new pods).
+	kubectl -n production set env deploy/faultgen FAULT_ENABLED=true
+	kubectl -n production rollout status deploy/faultgen --timeout=90s
+	kubectl run loadctl-$$(date +%s) --rm -i --restart=Never -n loadgen --image=$(CURL_IMG) -- \
+		curl -s -X POST http://loadgen.loadgen:8080/start -H 'Content-Type: application/json' \
+		-d '{"targetURL":"http://faultgen.production:8080","rps":$(RPS),"durationSec":$(DURATION),"errorPct":0,"delayMs":0}'
+	@echo ""
+	@echo "✓ storm injected. p99 climbs over ~2 min, then rule 2 fires. Watch:"
+	@echo "    kubectl -n production get agenticautoscaler faultgen-autoscaler -o jsonpath='{.status.lastDecisionReason}'"
+
+.PHONY: storm-down
+storm-down: ## Clear the timeout storm and stop traffic.
+	kubectl -n production set env deploy/faultgen FAULT_ENABLED=false
+	kubectl run loadctl-$$(date +%s) --rm -i --restart=Never -n loadgen --image=$(CURL_IMG) -- \
+		curl -s -X POST http://loadgen.loadgen:8080/stop
+	@echo ""
+	@echo "✓ storm cleared, load stopped."
+
+.PHONY: storm-live
+storm-live: ## Switch the faultgen autoscaler out of dry-run so it scales for real.
+	kubectl -n production patch agenticautoscaler faultgen-autoscaler \
+		--type merge -p '{"spec":{"dryRun":false}}'
+	@echo "✓ faultgen-autoscaler is now LIVE (dryRun=false). Run 'make storm-up' to scale it."
 
 .PHONY: load-status
 load-status: ## Print the current load generator status.
