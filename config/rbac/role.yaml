@@ -23,6 +23,18 @@ rules:
   - list
   - watch
 - apiGroups:
+  - keda.sh
+  resources:
+  - scaledobjects
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - scaling.autoscaler.io
   resources:
   - agenticautoscalers

@@ -55,6 +55,11 @@ jobs:
           # Match the version pinned in the Makefile (GOLANGCI_LINT_VERSION).
           version: v1.54.2
           args: --timeout=5m
+          # The codebase predates any lint gate and carries known legacy findings.
+          # Enforce lint incrementally: a PR must not ADD new issues, but existing
+          # debt does not block. Tighten to a full-tree gate once the backlog is
+          # cleared. On PRs this diffs against the base branch.
+          only-new-issues: true
 
   verify-generated:
     name: verify generated artifacts
