@@ -32,6 +32,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	scalingv1alpha1 "github.com/Ngoga-Musagi/agentic-autoscaler/api/v1alpha1"
 	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/fusion"
@@ -949,5 +950,40 @@ func TestReconcile_InvalidCustomPattern_NonFatalAndReported(t *testing.T) {
 	// The built-in pattern still matched, so the quiet-window timer was cleared.
 	if updated.Status.LastCleanSince != nil {
 		t.Error("built-in patterns should still run: a matched pattern must clear LastCleanSince")
+	}
+}
+
+// ---- T2.3: reconcile-storm predicate -----------------------------------------
+
+// TestReconcileTriggerPredicate_FiltersStatusOnlyUpdates pins the watch filter
+// used by SetupWithManager: the operator's own status writes (which never bump
+// generation) must not re-enqueue a reconcile, while spec changes, creates, and
+// deletes still do. This is what prevents the status→watch→reconcile→status storm.
+func TestReconcileTriggerPredicate_FiltersStatusOnlyUpdates(t *testing.T) {
+	base := makeAA("autoscaler", "default", "my-service")
+	base.Generation = 3
+
+	// Status-only change: same generation, different status — must be filtered.
+	oldObj := base.DeepCopy()
+	newObj := base.DeepCopy()
+	newObj.Status.LastDecisionReason = "written by our own status patch"
+	if reconcileTriggerPredicate.Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj}) {
+		t.Error("status-only update (same generation) must be filtered, but it triggered a reconcile")
+	}
+
+	// Spec change: generation bumps — must trigger.
+	specNew := base.DeepCopy()
+	specNew.Generation = 4
+	specNew.Spec.MaxReplicas = 99
+	if !reconcileTriggerPredicate.Update(event.UpdateEvent{ObjectOld: base.DeepCopy(), ObjectNew: specNew}) {
+		t.Error("spec change (generation bumped) must trigger a reconcile, but it was filtered")
+	}
+
+	// Create and delete must always trigger.
+	if !reconcileTriggerPredicate.Create(event.CreateEvent{Object: base.DeepCopy()}) {
+		t.Error("create must trigger a reconcile")
+	}
+	if !reconcileTriggerPredicate.Delete(event.DeleteEvent{Object: base.DeepCopy()}) {
+		t.Error("delete must trigger a reconcile")
 	}
 }

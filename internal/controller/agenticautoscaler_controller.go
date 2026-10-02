@@ -29,8 +29,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	scalingv1alpha1 "github.com/Ngoga-Musagi/agentic-autoscaler/api/v1alpha1"
 	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/fusion"
@@ -86,6 +88,7 @@ func NewReconciler(c client.Client, scheme *runtime.Scheme) *AgenticAutoscalerRe
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch
 //+kubebuilder:rbac:groups=keda.sh,resources=scaledobjects,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 
 // Reconcile is the main reconciliation loop. It collects signals, runs the
 // reasoning engine, enforces policy, executes the scale action (unless dry-run),
@@ -371,9 +374,22 @@ func configuredProvider() string {
 	return "rule-based"
 }
 
+// reconcileTriggerPredicate filters the AgenticAutoscaler watch so the operator
+// does not re-enqueue itself on its own status writes. Status is updated via the
+// status subresource, which never bumps metadata.generation, so
+// GenerationChangedPredicate drops those update events while still reconciling on
+// create, delete, and any spec change.
+//
+// This stops the reconcile storm — status update → watch event → immediate
+// reconcile → status update … — that drove ~20 LLM calls/min while healthy and
+// once OOM-killed the kind node. Periodic signal polling is unaffected: it is
+// driven by the reconciler's RequeueAfter (a direct requeue, not a watch event),
+// so the operator still polls on its timer.
+var reconcileTriggerPredicate = predicate.GenerationChangedPredicate{}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *AgenticAutoscalerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&scalingv1alpha1.AgenticAutoscaler{}).
+		For(&scalingv1alpha1.AgenticAutoscaler{}, builder.WithPredicates(reconcileTriggerPredicate)).
 		Complete(r)
 }
