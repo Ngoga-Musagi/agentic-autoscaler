@@ -11,6 +11,7 @@ The operator ServiceAccount must only have:
 - `get/list/watch` on `HorizontalPodAutoscalers`
 - `get/list/watch/create/update/patch` on `AgenticAutoscalers` and `AgenticAutoscalers/status`
 - `get/list/watch/create/update/patch` on `ConfigMaps` (for decision log)
+- `get/list/watch` on `Namespaces` (read-only; for the console Onboard tab's namespace dropdown)
 - No cluster-admin, no secrets read
 
 ## Network policy

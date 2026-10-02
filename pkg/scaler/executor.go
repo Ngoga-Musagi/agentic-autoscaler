@@ -69,6 +69,13 @@ func (e *Executor) Execute(
 	ns := spec.Namespace
 	name := spec.TargetDeployment
 
+	// Defense in depth: an empty namespace means the Deployment lookup would
+	// target namespace "" and fail confusingly. The controller resolves the
+	// namespace before calling Execute; guard here so a misuse fails loudly.
+	if ns == "" {
+		return fmt.Errorf("scale %s: target namespace is empty", name)
+	}
+
 	// GET the Deployment to capture current replicas for the audit log.
 	current := &appsv1.Deployment{}
 	if err := e.client.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, current); err != nil {

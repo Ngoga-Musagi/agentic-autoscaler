@@ -1,0 +1,24 @@
+# Build the faultgen binary — DEMO / TESTING ONLY.
+# faultgen is the timeout-storm demo workload: an HTTP echo service that exposes
+# service-labelled Prometheus metrics and, on command, injects latency and emits
+# log lines that match the operator's fusion patterns. Never for production.
+FROM golang:1.21 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /workspace
+COPY go.mod go.mod
+COPY go.sum go.sum
+RUN go mod download
+
+COPY cmd/faultgen/ cmd/faultgen/
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o faultgen ./cmd/faultgen
+
+# Distroless, non-root — same security posture as the operator and loadgen images.
+FROM gcr.io/distroless/static:nonroot
+WORKDIR /
+COPY --from=builder /workspace/faultgen .
+USER 65532:65532
+
+ENTRYPOINT ["/faultgen"]

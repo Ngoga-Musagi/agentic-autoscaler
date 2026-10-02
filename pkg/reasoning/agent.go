@@ -99,6 +99,23 @@ type Config struct {
 
 	// MaxReplicas is the upper bound from the AgenticAutoscaler spec.
 	MaxReplicas int32
+
+	// CleanSince is when log patterns last cleared, supplied by the controller
+	// from status.lastCleanSince. It carries the sustained-quiet timer across
+	// reconciles so the scale-down rule survives the controller rebuilding the
+	// agent every cycle. Nil means patterns are currently active.
+	CleanSince *metav1.Time
+
+	// ConsecutivePatternWindows is the number of consecutive reconcile windows
+	// (including the current one) in which a qualifying log pattern has been
+	// present. The controller supplies it from status.consecutivePatternWindows.
+	ConsecutivePatternWindows int32
+
+	// ConsecutiveWindowThreshold is spec.detection.consecutiveWindows (minimum 1):
+	// how many consecutive windows a sustained log pattern must persist before the
+	// sustained scale-up rules (rule 2, rule 4) may fire. 1 preserves immediate,
+	// single-window behaviour.
+	ConsecutiveWindowThreshold int32
 }
 
 // NewAgent returns the Agent implementation selected by cfg.Provider.

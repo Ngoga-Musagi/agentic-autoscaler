@@ -117,6 +117,45 @@ Contract for each query: `latencyP99` returns **seconds**, `errorRate` returns a
 metric queries** section exposes the same four fields with the defaults shown as
 placeholders.
 
+### Custom log patterns (match your own incident strings)
+
+The operator ships with five built-in log patterns (`connection-pool-exhausted`,
+`upstream-timeout`, `oom-killed`, `circuit-breaker-open`, `db-connection-failed`).
+Real services phrase incidents differently, so you can add your own via
+`spec.logPatterns` — no fork, no code change. Each entry is compiled and
+**merged with the built-ins every reconcile**; an entry that reuses a built-in
+name **overrides** it.
+
+```yaml
+spec:
+  logPatterns:
+    - name: tls-handshake-timeout          # new pattern, appended to the defaults
+      regex: 'tls: handshake timeout'
+      severity: critical                   # "warning" or "critical"
+      score: 80                            # weight 0–100 toward the severity score
+    - name: connection-pool-exhausted      # reuses a built-in name → overrides it
+      regex: 'POOL DRAINED|pool at capacity'
+      severity: critical
+      score: 90
+```
+
+- `regex` is [RE2](https://github.com/google/re2/wiki/Syntax) syntax, matched
+  against each raw log message.
+- `score` is an integer **0–100** (mapped internally to 0.0–1.0); it sets the
+  pattern's contribution to the fused `SeverityScore`.
+- **Invalid entries are non-fatal.** A pattern whose regex fails to compile is
+  skipped and reported in `status.logPatternWarnings`; the operator continues
+  with the remaining valid patterns and all built-ins:
+
+  ```sh
+  kubectl get agenticautoscaler my-api-autoscaler \
+    -o jsonpath='{.status.logPatternWarnings}'
+  ```
+
+To make a custom pattern drive the built-in scale-up rules, override a built-in
+name the rules key on (e.g. `connection-pool-exhausted` feeds the rule that
+scales up on pool exhaustion + high p99 latency).
+
 ### HPA coexistence
 
 If an HPA already targets the Deployment, start in `calibrated` mode so the

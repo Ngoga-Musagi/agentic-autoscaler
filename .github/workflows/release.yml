@@ -1,0 +1,61 @@
+name: Release image
+
+# Publishes a multi-architecture (amd64 + arm64) operator image to GHCR on every
+# semver tag. The Helm chart references ghcr.io/ngoga-musagi/agentic-autoscaler
+# and defaults image.tag to the chart appVersion, so a tag like v0.1.0 makes
+# `helm install` pull a matching, ready-to-run image on a clean machine — no
+# local `make docker-build` needed, on both amd64 and Apple-Silicon arm64.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: build & push multi-arch image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: lowercase image name
+        id: img
+        # GHCR requires a lowercase repository; the owner (Ngoga-Musagi) is mixed
+        # case. Derive ghcr.io/<owner>/<repo> in lowercase to match the chart.
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: derive image tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.img.outputs.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: build and push (linux/amd64, linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false

@@ -1,0 +1,66 @@
+# A non-podinfo service with its own metric names, its own log patterns, and the
+# "across N consecutive windows" gate. This proves the reusability story: the
+# operator adapts to any service via the CR, no code changes.
+#
+#   - spec.metrics          : point at this service's PromQL (different metric names)
+#   - spec.logPatterns      : add patterns specific to this stack (merged with the
+#                             five built-ins; an entry reusing a built-in name
+#                             overrides it; an invalid regex is skipped, not fatal)
+#   - spec.detection        : require a pattern to persist across N windows before
+#                             the sustained scale-up rules fire (abstract's
+#                             "across 3 consecutive log windows")
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: checkout-api-autoscaler
+  namespace: shop
+  labels:
+    app.kubernetes.io/managed-by: agentic-autoscaler
+spec:
+  targetDeployment: checkout-api
+  prometheusURL: "http://prometheus-operated.monitoring:9090"
+
+  # This service does not use the default http_* metric names.
+  metrics:
+    latencyP99:        'histogram_quantile(0.99, sum by (le) (rate(checkout_request_duration_seconds_bucket{service="$TARGET"}[2m])))'
+    errorRate:         'sum(rate(checkout_requests_total{service="$TARGET",code=~"5.."}[2m])) / clamp_min(sum(rate(checkout_requests_total{service="$TARGET"}[2m])), 0.001) * 100'
+    cpuUtilization:    'avg(rate(container_cpu_usage_seconds_total{pod=~"$TARGET-.*"}[2m])) * 100'
+    requestsPerSecond: 'sum(rate(checkout_requests_total{service="$TARGET"}[2m]))'
+
+  logSource:
+    type: loki
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{namespace="shop", app="checkout-api"}'
+
+  # Custom incident patterns for this stack, merged with the built-ins.
+  logPatterns:
+    - name: tls-handshake-timeout
+      regex: 'tls: handshake timeout'
+      severity: critical
+      score: 80
+    - name: dns-resolution-failed
+      regex: 'no such host|SERVFAIL'
+      severity: warning
+      score: 50
+
+  # Require a sustained pattern across 3 windows before the sustained scale-up
+  # rules fire (OOM is never gated). Default is 1 (immediate).
+  detection:
+    consecutiveWindows: 3
+
+  minReplicas: 2
+  maxReplicas: 25
+  cooldownSeconds: 120
+  dryRun: true
+
+  hpaCoexistence:
+    mode: owner
+
+  aiProvider:
+    provider: ollama        # self-hosted; no cloud account needed
+    # no secretRef required for ollama
+
+  observability:
+    grafanaURL: "http://grafana.monitoring:3000"
+    secretRef: grafana-api-secret

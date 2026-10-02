@@ -125,6 +125,50 @@ type MetricQueries struct {
 	RequestsPerSecond string `json:"requestsPerSecond,omitempty"`
 }
 
+// LogPatternSpec defines a custom log pattern that adopters can add to the
+// operator's built-in set without forking. Each entry is compiled and merged
+// with the defaults every reconcile; an entry with the same Name as a built-in
+// pattern overrides it. An entry that fails to compile is skipped (never fatal)
+// and reported in status.logPatternWarnings.
+type LogPatternSpec struct {
+	// Name is the stable identifier surfaced in decisions and Grafana
+	// annotations (e.g. "tls-handshake-timeout"). Reusing a built-in name
+	// overrides that pattern.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Regex is the RE2 regular expression matched against each log message.
+	// +kubebuilder:validation:MinLength=1
+	Regex string `json:"regex"`
+
+	// Severity is "warning" or "critical".
+	// +kubebuilder:validation:Enum=warning;critical
+	Severity string `json:"severity"`
+
+	// Score is this pattern's contribution to the fused SeverityScore, given as a
+	// weight from 0 to 100 (mapped internally to 0.0–1.0). An integer is used
+	// rather than a float because floats are discouraged in CRDs for
+	// cross-language portability. Example: 85 contributes a 0.85 severity weight.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	Score int32 `json:"score"`
+}
+
+// DetectionConfig tunes how log-pattern signals are interpreted across
+// reconcile windows before they drive a scaling decision.
+type DetectionConfig struct {
+	// ConsecutiveWindows is the number of consecutive reconcile windows a
+	// sustained log pattern (e.g. connection-pool-exhausted) must persist
+	// before the sustained scale-up rules fire. The default of 1 preserves the
+	// original single-window behaviour; the timeout-storm demo sets 3 to match
+	// the "across 3 consecutive log windows" annotation. Emergency signals such
+	// as OOMKilled are never gated by this counter.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
+	ConsecutiveWindows int32 `json:"consecutiveWindows,omitempty"`
+}
+
 // AgenticAutoscalerSpec defines the desired state of AgenticAutoscaler.
 type AgenticAutoscalerSpec struct {
 	// TargetDeployment is the name of the Deployment this CR manages.
@@ -177,6 +221,19 @@ type AgenticAutoscalerSpec struct {
 	// Observability configures Grafana annotation emission for decision audit trails.
 	// +optional
 	Observability ObservabilityConfig `json:"observability,omitempty"`
+
+	// Detection tunes cross-window log-pattern persistence before a scale
+	// decision is taken. Omitting it preserves single-window behaviour.
+	// +optional
+	Detection DetectionConfig `json:"detection,omitempty"`
+
+	// LogPatterns adds custom log patterns to the operator's built-in set so
+	// adopters can match their own incident strings without forking. Each entry
+	// is merged with the defaults (an entry reusing a built-in name overrides
+	// it); an entry that fails to compile is skipped and reported in
+	// status.logPatternWarnings. Empty preserves the built-in behaviour.
+	// +optional
+	LogPatterns []LogPatternSpec `json:"logPatterns,omitempty"`
 }
 
 // AgenticAutoscalerStatus defines the observed state of AgenticAutoscaler.
@@ -201,6 +258,29 @@ type AgenticAutoscalerStatus struct {
 	// ObservedGeneration is the .metadata.generation this status was produced from.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// LastCleanSince is when the most recent matched log pattern last cleared.
+	// It is the durable, cross-reconcile anchor for the sustained-quiet
+	// scale-down rule: the rule may fire only once the clean window has elapsed
+	// since this timestamp. The controller starts it on the first pattern-free
+	// reconcile and clears it whenever a pattern reappears. A nil value means
+	// patterns are currently active (or were on the last reconcile).
+	// +optional
+	LastCleanSince *metav1.Time `json:"lastCleanSince,omitempty"`
+
+	// ConsecutivePatternWindows counts how many consecutive reconciles have seen
+	// at least one matched log pattern. It backs spec.detection.consecutiveWindows:
+	// the sustained scale-up rules fire only once this counter reaches the
+	// configured threshold. It resets to 0 on the first pattern-free reconcile.
+	// +optional
+	ConsecutivePatternWindows int32 `json:"consecutivePatternWindows,omitempty"`
+
+	// LogPatternWarnings lists custom patterns from spec.logPatterns that were
+	// skipped this reconcile because they failed to compile (e.g. an invalid
+	// regex). It is empty when every custom pattern is valid or none are set.
+	// The operator continues with the remaining valid patterns.
+	// +optional
+	LogPatternWarnings []string `json:"logPatternWarnings,omitempty"`
 }
 
 //+kubebuilder:object:root=true
