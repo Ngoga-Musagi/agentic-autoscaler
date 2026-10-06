@@ -28,7 +28,7 @@ jobs:
           # Use the built-in token so the action does not require the Claude
           # GitHub App to be installed/scoped on this repo for its token exchange.
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          model: claude-sonnet-4-20250514
+          model: claude-sonnet-5
           direct_prompt: |
             Review this PR using the agent defined in .claude/agents/code-reviewer.md.
             Run `git diff origin/main...HEAD` to see what changed.

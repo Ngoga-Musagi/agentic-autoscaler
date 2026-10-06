@@ -28,7 +28,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          model: claude-sonnet-4-20250514
+          model: claude-sonnet-5
           direct_prompt: |
             Review the lint report in lint-report.json.
             Pick the two most impactful packages to improve this week.

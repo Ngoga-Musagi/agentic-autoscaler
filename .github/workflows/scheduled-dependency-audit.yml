@@ -21,7 +21,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          model: claude-sonnet-4-20250514
+          model: claude-sonnet-5
           direct_prompt: |
             Audit and update dependencies in the agentic-autoscaler project.
             1. Run `go list -m -u all` to find outdated modules
