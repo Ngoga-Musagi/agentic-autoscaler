@@ -25,8 +25,11 @@ jobs:
       - uses: anthropics/claude-code-action@beta
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Use the built-in token so the action does not require the Claude
+          # GitHub App to be installed/scoped on this repo for its token exchange.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           model: claude-sonnet-4-20250514
-          prompt: |
+          direct_prompt: |
             Review this PR using the agent defined in .claude/agents/code-reviewer.md.
             Run `git diff origin/main...HEAD` to see what changed.
             Pay extra attention to:

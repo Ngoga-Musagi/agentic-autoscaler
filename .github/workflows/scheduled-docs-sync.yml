@@ -18,8 +18,9 @@ jobs:
       - uses: anthropics/claude-code-action@beta
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           model: claude-sonnet-4-20250514
-          prompt: |
+          direct_prompt: |
             Read the git log for the last 30 days: `git log --oneline --since="30 days ago"`.
             Review all markdown files in .claude/skills/ and CLAUDE.md.
             Check if:

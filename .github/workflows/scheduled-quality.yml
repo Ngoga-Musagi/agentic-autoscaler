@@ -20,8 +20,9 @@ jobs:
       - uses: anthropics/claude-code-action@beta
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           model: claude-sonnet-4-20250514
-          prompt: |
+          direct_prompt: |
             Run a code quality sweep on the agentic-autoscaler project.
             1. Run `go vet ./...` and fix any issues found
             2. Run `golangci-lint run ./...` — fix warnings in pkg/ packages
