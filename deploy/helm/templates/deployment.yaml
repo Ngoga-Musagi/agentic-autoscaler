@@ -67,7 +67,11 @@ spec:
             {{- end }}
             {{- if eq .Values.aiProvider.provider "ollama" }}
             - name: OLLAMA_BASE_URL
+              {{- if .Values.ollama.baseURL }}
+              value: {{ .Values.ollama.baseURL | quote }}
+              {{- else }}
               value: {{ printf "http://ollama.%s.svc.cluster.local:11434" .Values.ollama.namespace | quote }}
+              {{- end }}
             - name: OLLAMA_MODEL
               value: {{ .Values.ollama.model | quote }}
             {{- end }}

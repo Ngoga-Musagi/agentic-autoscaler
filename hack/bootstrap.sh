@@ -258,9 +258,31 @@ kubectl apply -f config/crd/bases/
 
 helm dependency update deploy/helm/ > /dev/null 2>&1 || true
 
-# Build the optional --set flags: model override, and (demo) console write mode.
+# ── AI provider selection ─────────────────────────────────────────────────
+# AI_PROVIDER: anthropic (default) | ollama | openai. For ollama we point the
+# operator at a host-native Ollama by default — it uses the host GPU
+# automatically when present (an RTX card, etc.) and needs no in-cluster model
+# pull. Override endpoint/model with OLLAMA_BASE_URL / OLLAMA_MODEL.
+AI_PROVIDER="${AI_PROVIDER:-anthropic}"
 EXTRA_SET=()
-[ -n "$ANTHROPIC_MODEL" ] && EXTRA_SET+=(--set "aiProvider.model=$ANTHROPIC_MODEL")
+
+if [ "$AI_PROVIDER" = "ollama" ]; then
+    OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+    OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:3b}"
+    EXTRA_SET+=(--set "ollama.baseURL=$OLLAMA_BASE_URL")
+    EXTRA_SET+=(--set "ollama.model=$OLLAMA_MODEL")
+    EXTRA_SET+=(--set "ollama.enabled=false")
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        ok "GPU detected (nvidia-smi) — host-native Ollama will use it automatically"
+    else
+        warn "No GPU detected — Ollama will run on CPU (small models only); for lower latency use AI_PROVIDER=anthropic"
+    fi
+    warn "Run Ollama on the host first:  ollama serve  &&  ollama pull $OLLAMA_MODEL"
+    warn "Operator will reach Ollama at $OLLAMA_BASE_URL"
+else
+    [ -n "$ANTHROPIC_MODEL" ] && EXTRA_SET+=(--set "aiProvider.model=$ANTHROPIC_MODEL")
+fi
+
 if [ "$WITH_LOADGEN" = "1" ]; then
     EXTRA_SET+=(--set console.writeEnabled=true)
     EXTRA_SET+=(--set console.loadgenURL=http://loadgen.loadgen.svc.cluster.local:8080)
@@ -271,7 +293,7 @@ helm upgrade --install agentic-autoscaler deploy/helm/ \
     --set image.repository=agentic-autoscaler \
     --set image.tag=dev \
     --set image.pullPolicy=Never \
-    --set aiProvider.provider=anthropic \
+    --set "aiProvider.provider=$AI_PROVIDER" \
     --set aiProvider.secretRef=ai-provider-secret \
     --set grafana.url="http://kube-prometheus-stack-grafana.monitoring" \
     --set grafana.secretRef=grafana-api-secret \

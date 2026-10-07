@@ -8,8 +8,10 @@ image:
   tag: "0.1.44"
   pullPolicy: IfNotPresent
 
-# -- Model to pull on first startup (e.g. "llama3:8b", "mistral:7b").
-model: "llama3:8b"
+# -- Model to pull on first startup. Default is a small (~3B) model that runs on
+# CPU in ~4 GB RAM; on a GPU you can run larger (see gpu below). Examples:
+# "qwen2.5:3b", "qwen3:4b", "llama3.2:3b", "gemma2:2b", "llama3:8b".
+model: "qwen2.5:3b"
 
 # -- Namespace the Ollama Deployment is created in.
 # Must exist before installing; not created by this chart.
@@ -18,13 +20,29 @@ namespace: "ollama"
 service:
   port: 11434
 
+# -- CPU/memory for the Ollama Pod. Defaults suit the small (~3B) CPU model.
+# For a GPU or a larger model, raise these (and enable gpu below).
 resources:
   requests:
-    cpu: "2"
-    memory: "12Gi"
+    cpu: "1"
+    memory: "4Gi"
   limits:
-    cpu: "4"
-    memory: "16Gi"
+    cpu: "2"
+    memory: "6Gi"
+
+# -- GPU acceleration. When enabled, the Pod requests nvidia.com/gpu (the
+# cluster must have the NVIDIA device plugin installed and a GPU node), and
+# Ollama uses the GPU automatically. When disabled (default), Ollama runs on
+# CPU — portable, no GPU required, best with a small (~4B) model.
+# For a laptop/desktop GPU (e.g. an RTX card), the simplest path is to run
+# Ollama natively on the host instead and point the operator at it via
+# OLLAMA_BASE_URL — see docs/on-prem-llm.md.
+gpu:
+  enabled: false
+  # -- Number of GPUs to request (nvidia.com/gpu).
+  count: 1
+  # -- runtimeClassName for the GPU runtime (often "nvidia"); empty to omit.
+  runtimeClassName: ""
 
 # -- Node selector for the GPU / high-memory dedicated node pool.
 nodeSelector: {}
@@ -39,5 +57,5 @@ tolerations:
 persistence:
   # -- Persist downloaded model weights across Pod restarts.
   enabled: true
-  size: "40Gi"
+  size: "20Gi"
   storageClass: ""
