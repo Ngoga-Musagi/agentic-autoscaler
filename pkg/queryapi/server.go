@@ -77,6 +77,8 @@ func NewServer(c client.Client, namespace string, cfg ConsoleConfig) *Server {
 	mux.HandleFunc("/api/deployments", s.handleDeployments)
 	mux.HandleFunc("/api/autoscalers", s.handleAutoscalers)
 	mux.HandleFunc("/api/autoscalers/", s.handleAutoscalerItem)
+	// Preflight: validate a user's Prometheus/Loki endpoints before onboarding.
+	mux.HandleFunc("/api/preflight", s.handlePreflight)
 	// Load generator control proxy.
 	mux.HandleFunc("/api/load/start", s.handleLoadStart)
 	mux.HandleFunc("/api/load/stop", s.handleLoadStop)

@@ -18,6 +18,37 @@ helm upgrade --install agentic-autoscaler deploy/helm/ \
 The operator watches **all namespaces** but only manages Deployments that have a
 matching `AgenticAutoscaler` CR.
 
+**Already running Prometheus/Loki?** Use the existing-infra overlay so the chart
+doesn't assume a bundled stack and scopes egress to your monitoring namespace:
+
+```sh
+helm upgrade --install agentic-autoscaler deploy/helm/ \
+  --namespace agentic-autoscaler-system --create-namespace \
+  -f deploy/helm/values-existing-infra.yaml
+```
+
+### Validate your endpoints before onboarding (preflight)
+
+Before creating a CR, test that the operator can actually reach your Prometheus
+and Loki and that the queries return data — the most common reason a new CR
+"doesn't scale" is an unreachable endpoint or a query that matches nothing. The
+console exposes `POST /api/preflight` (write-mode) for this; the Onboard tab uses
+it, or call it directly:
+
+```sh
+curl -s -X POST http://localhost:8090/api/preflight \
+  -H 'Content-Type: application/json' \
+  -d '{"prometheusURL":"http://prometheus-operated.monitoring:9090",
+       "promQuery":"up{service=\"my-api\"}",
+       "lokiURL":"http://loki.monitoring:3100",
+       "lokiQuery":"{namespace=\"my-ns\", app=\"my-api\"}"}'
+# → {"prometheus":{"checked":true,"ok":true,"results":N,...},
+#    "loki":{"checked":true,"ok":true,"results":M,...}}
+```
+
+Each check reports `ok` plus a `detail` string ("reachable; N series",
+"reachable, but no series — check the metric name / labels", "unreachable …").
+
 ## 2. Onboard a Deployment from the browser (no YAML)
 
 The console can create the CR for you. It is **read-only by default** — enable

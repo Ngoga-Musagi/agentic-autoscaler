@@ -1,0 +1,36 @@
+# Existing-infrastructure overlay — use your own Prometheus/Loki/Grafana.
+#
+# The operator chart installs only the operator + console; it never bundles
+# Prometheus or Loki (hack/bootstrap.sh does that for the self-contained demo).
+# When you already run a monitoring stack, skip the demo stack entirely and:
+#
+#   1. install the operator with this overlay (points egress at your namespaces),
+#   2. create an AgenticAutoscaler CR per workload with prometheusURL + logSource
+#      pointing at YOUR endpoints (see docs/integrating-existing-infra.md),
+#   3. use the console's Onboard tab (it can preflight-test your endpoints first).
+#
+#   helm upgrade --install agentic-autoscaler deploy/helm/ \
+#     --namespace agentic-autoscaler-system --create-namespace \
+#     -f deploy/helm/values-existing-infra.yaml \
+#     --set aiProvider.secretRef=my-ai-key            # your provider secret
+#
+# The operator reads the actual endpoints from each CR, so set them there; the
+# values below only scope the NetworkPolicy egress to where your stack runs.
+
+# Restrict operator egress to YOUR monitoring namespace/ports.
+networkPolicy:
+  enabled: true
+  # -- Namespace + port where YOUR Prometheus runs.
+  prometheusNamespace: "monitoring"
+  prometheusPort: 9090
+  # -- Namespace + port where YOUR Loki runs.
+  lokiNamespace: "monitoring"
+  lokiPort: 3100
+
+# Grafana annotations are optional; point at your Grafana to enable them.
+grafana:
+  url: ""              # e.g. http://grafana.monitoring:3000
+  secretRef: "agentic-autoscaler-grafana-token"
+
+# Start safe — observe decisions before enabling live scaling.
+dryRun: true
