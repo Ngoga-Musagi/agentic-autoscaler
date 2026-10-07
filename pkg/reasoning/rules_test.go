@@ -433,3 +433,25 @@ func TestRuleBasedAgent_DefaultThresholdOmitsWindowClaim(t *testing.T) {
 		t.Errorf("default threshold must not claim a multi-window gate, got %q", got.Reason)
 	}
 }
+
+// ---- configurable scale-down quiet window (B) ------------------------------
+
+func TestRuleBasedAgent_ConfigurableQuietWindow(t *testing.T) {
+	// Healthy signal: severity 0, low CPU — rule 5 is eligible once the quiet
+	// window elapses. CleanSince is 2 minutes in the past.
+	sig := makeSignal(signals.MetricSnapshot{CPUUtilPct: 10, LatencyP99Ms: 40})
+
+	// Default window (15 min): 2 minutes of quiet is NOT enough.
+	cfg := baseConfig
+	cfg.CleanSince = cleanSince(2 * time.Minute)
+	if got, _ := newAgent(cfg).Decide(context.Background(), sig); got.Action == "scale-down" {
+		t.Errorf("default 15m window: 2min quiet must not scale down, got %q", got.Action)
+	}
+
+	// Short window (1 min): 2 minutes of quiet IS enough.
+	cfg.CleanWindow = 1 * time.Minute
+	got, _ := newAgent(cfg).Decide(context.Background(), sig)
+	if got.Action != "scale-down" {
+		t.Errorf("1m window: 2min quiet should scale down, got %q", got.Action)
+	}
+}

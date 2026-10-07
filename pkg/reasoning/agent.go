@@ -116,6 +116,11 @@ type Config struct {
 	// sustained scale-up rules (rule 2, rule 4) may fire. 1 preserves immediate,
 	// single-window behaviour.
 	ConsecutiveWindowThreshold int32
+
+	// CleanWindow is how long signals must stay healthy before the scale-down
+	// rule fires, from spec.detection.scaleDownQuietWindowMinutes. Zero means use
+	// the built-in default (15 minutes).
+	CleanWindow time.Duration
 }
 
 // NewAgent returns the Agent implementation selected by cfg.Provider.

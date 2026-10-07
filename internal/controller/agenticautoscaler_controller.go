@@ -182,6 +182,8 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		// being rebuilt every reconcile.
 		ConsecutivePatternWindows:  consecutiveWindows,
 		ConsecutiveWindowThreshold: windowThreshold,
+		// Configurable scale-down quiet window (default 15m when unset/zero).
+		CleanWindow: time.Duration(aa.Spec.Detection.ScaleDownQuietWindowMinutes) * time.Minute,
 	})
 	decision, err := agent.Decide(ctx, fused)
 	if err != nil {

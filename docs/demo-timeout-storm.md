@@ -83,3 +83,28 @@ Confirm each stage independently:
 >   `$TARGET`) and is scraped by a `ServiceMonitor` (kube-prometheus-stack does
 >   not use `prometheus.io/scrape` annotations).
 > - Demo/testing only. Never run faultgen or the load generator in production.
+
+## Watching it scale back down
+
+Scaling up is only half the story — the operator also releases capacity when
+things go quiet (rule 5: zero severity + CPU < 20% sustained for the quiet
+window). The window defaults to **15 minutes**, which is a long demo, so make it
+short with `spec.detection.scaleDownQuietWindowMinutes`:
+
+```sh
+make demo-scale-down QUIET=2     # faultgen: live, owner, 2-min quiet window
+make storm-up                    # drives it UP (rule 2)
+make storm-down                  # clears the storm → signals go quiet
+kubectl -n production get deploy faultgen -w   # ~2 min later: back down to min+1
+```
+
+The scale-down decision is recorded like any other:
+
+```jsonc
+{ "action": "scale-down",
+  "reason": "all signals healthy for the quiet window, releasing excess capacity (replicas 8 → 3)",
+  "provider": "rule-based" }
+```
+
+In production leave the window at its conservative default (or higher); the short
+window is only to make the demo observable in minutes rather than a quarter hour.

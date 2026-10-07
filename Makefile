@@ -267,6 +267,24 @@ storm-live: ## Switch the faultgen autoscaler out of dry-run so it scales for re
 		--type merge -p '{"spec":{"dryRun":false}}'
 	@echo "✓ faultgen-autoscaler is now LIVE (dryRun=false). Run 'make storm-up' to scale it."
 
+# ── Scale-DOWN demo: watch the quiet-window rule release capacity ────────────
+# Overridable quiet window (minutes). The default rule-5 window is 15 min; set a
+# short one for the demo. e.g. make demo-scale-down QUIET=2
+QUIET ?= 2
+
+.PHONY: demo-scale-down
+demo-scale-down: ## Make faultgen scale UP then DOWN: owner+live, short quiet window.
+	# Owner mode, live, short scale-down window so you don't wait 15 min.
+	kubectl -n production patch agenticautoscaler faultgen-autoscaler --type merge \
+		-p '{"spec":{"dryRun":false,"hpaCoexistence":{"mode":"owner"},"detection":{"scaleDownQuietWindowMinutes":$(QUIET)}}}'
+	@echo ""
+	@echo "✓ faultgen-autoscaler: live, owner, scale-down after ~$(QUIET) min of quiet."
+	@echo "  1) make storm-up         # drives it UP (rule 2)"
+	@echo "  2) make storm-down       # clears the storm → signals go quiet"
+	@echo "  3) watch it come back DOWN to minReplicas+1 after ~$(QUIET) min + cooldown:"
+	@echo "       kubectl -n production get deploy faultgen -w"
+	@echo "       kubectl -n production get agenticautoscaler faultgen-autoscaler -o jsonpath='{.status.lastDecisionReason}'"
+
 .PHONY: load-status
 load-status: ## Print the current load generator status.
 	kubectl run loadctl-$$(date +%s) --rm -i --restart=Never -n loadgen --image=$(CURL_IMG) -- \
