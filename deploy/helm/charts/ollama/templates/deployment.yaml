@@ -19,6 +19,9 @@ spec:
         # Pull the model on first start via an init container.
         ollama/model: {{ .Values.model | quote }}
     spec:
+      {{- if and .Values.gpu.enabled .Values.gpu.runtimeClassName }}
+      runtimeClassName: {{ .Values.gpu.runtimeClassName }}
+      {{- end }}
       # Dedicated node pool for high-memory / GPU workloads.
       {{- with .Values.nodeSelector }}
       nodeSelector:
@@ -67,7 +70,13 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 5
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            requests:
+              {{- toYaml .Values.resources.requests | nindent 14 }}
+            limits:
+              {{- toYaml .Values.resources.limits | nindent 14 }}
+              {{- if .Values.gpu.enabled }}
+              nvidia.com/gpu: {{ .Values.gpu.count | default 1 }}
+              {{- end }}
           volumeMounts:
             - name: models
               mountPath: /root/.ollama

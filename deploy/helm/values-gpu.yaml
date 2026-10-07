@@ -1,0 +1,33 @@
+# GPU overlay — in-cluster Ollama with NVIDIA GPU acceleration.
+#
+# Use when your cluster has a GPU node and the NVIDIA device plugin installed:
+#
+#   helm upgrade --install agentic-autoscaler deploy/helm/ \
+#     --namespace agentic-autoscaler-system --create-namespace \
+#     -f deploy/helm/values-gpu.yaml
+#
+# With a GPU (e.g. 8 GB VRAM) you can run a larger model than the CPU default.
+# For a laptop/desktop GPU, running Ollama natively on the host and pointing the
+# operator at it (OLLAMA_BASE_URL) is simpler than plumbing the GPU into the
+# cluster — see docs/on-prem-llm.md.
+aiProvider:
+  provider: ollama
+
+ollama:
+  enabled: true
+  # A 7–8B model fits comfortably in ~8 GB VRAM and reasons better than the 3B
+  # CPU default. Drop to qwen2.5:3b / qwen3:4b for smaller GPUs.
+  model: "qwen2.5:7b"
+  gpu:
+    enabled: true
+    count: 1
+    # Set to your cluster's NVIDIA runtime class if required (often "nvidia").
+    # Leave empty if the default runtime already exposes the GPU.
+    runtimeClassName: ""
+  resources:
+    requests:
+      cpu: "2"
+      memory: "6Gi"
+    limits:
+      cpu: "4"
+      memory: "10Gi"
