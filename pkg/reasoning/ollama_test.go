@@ -232,3 +232,76 @@ func TestOllamaAgent_DefaultModel_UsedWhenModelEmpty(t *testing.T) {
 		t.Errorf("default model: want %q, got %q", ollamaDefaultModel, capturedModel)
 	}
 }
+
+// ---- small-model hardening -------------------------------------------------
+
+// TestOllamaAgent_RequestConstrainsJSON asserts the request asks Ollama to
+// constrain output to JSON with a deterministic (temperature 0) sampler — the
+// two settings that make small models reliably emit the decision object.
+func TestOllamaAgent_RequestConstrainsJSON(t *testing.T) {
+	var req ollamaRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		writeOllamaJSON(w, validOllamaEnvelope(`{"action":"hold","targetReplicas":0,"confidence":0.5,"reason":"steady"}`))
+	}))
+	defer srv.Close()
+
+	agent := NewOllamaAgent(ollamaTestConfig(srv.URL))
+	if _, err := agent.Decide(context.Background(), neutralSignal()); err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if req.Format != "json" {
+		t.Errorf("request Format: want %q, got %q", "json", req.Format)
+	}
+	if req.Options == nil || req.Options.Temperature != 0 {
+		t.Errorf("request Options.Temperature: want 0, got %+v", req.Options)
+	}
+}
+
+// TestOllamaAgent_WrappedJSON_Parsed proves the parser tolerates the markdown
+// fences and surrounding prose that small models emit despite format:json.
+func TestOllamaAgent_WrappedJSON_Parsed(t *testing.T) {
+	decision := `{"action":"scale-up","targetReplicas":8,"confidence":0.8,"reason":"pool exhausted"}`
+	cases := map[string]string{
+		"markdown fence":     "```json\n" + decision + "\n```",
+		"bare fence":         "```\n" + decision + "\n```",
+		"prose around json":  "Here is my decision:\n" + decision + "\nHope that helps.",
+		"leading whitespace": "   \n" + decision,
+	}
+	for name, wrapped := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeOllamaJSON(w, validOllamaEnvelope(wrapped))
+			}))
+			defer srv.Close()
+
+			agent := NewOllamaAgent(ollamaTestConfig(srv.URL))
+			got, err := agent.Decide(context.Background(), neutralSignal())
+			if err != nil {
+				t.Fatalf("Decide: %v", err)
+			}
+			if got.Action != "scale-up" || got.TargetReplicas != 8 {
+				t.Errorf("want scale-up/8 from wrapped JSON, got %s/%d", got.Action, got.TargetReplicas)
+			}
+		})
+	}
+}
+
+func TestExtractJSONObject(t *testing.T) {
+	obj := `{"action":"hold"}`
+	cases := []struct {
+		in, want string
+	}{
+		{obj, obj},
+		{"```json\n" + obj + "\n```", obj},
+		{"```\n" + obj + "\n```", obj},
+		{"prefix " + obj + " suffix", obj},
+		{"  " + obj + "  ", obj},
+		{"no json here", "no json here"},
+	}
+	for _, c := range cases {
+		if got := extractJSONObject(c.in); got != c.want {
+			t.Errorf("extractJSONObject(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

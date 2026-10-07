@@ -32,7 +32,7 @@ import (
 const (
 	anthropicDefaultEndpoint = "https://api.anthropic.com"
 	anthropicAPIVersion      = "2023-06-01"
-	anthropicDefaultModel    = "claude-sonnet-4-20250514"
+	anthropicDefaultModel    = "claude-sonnet-5"
 	anthropicMaxTokens       = 256
 	anthropicHTTPTimeout     = 10 * time.Second
 	anthropicMaxRetries      = 2

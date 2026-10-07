@@ -18,7 +18,7 @@ OPENAI_MODEL=gpt-4o
 # Self-hosted — Ollama (in-cluster)
 AI_PROVIDER=ollama
 OLLAMA_BASE_URL=http://ollama.ollama.svc.cluster.local:11434
-OLLAMA_MODEL=llama3:8b
+OLLAMA_MODEL=qwen2.5:3b
 ```
 
 ## Architecture rule
@@ -39,13 +39,18 @@ Never call provider SDKs directly from `internal/controller/` — always go thro
 - API key sourced from env var, which is mounted from a K8s Secret
 - Fallback: if the cloud API fails after retries, fall through to the rule-based agent
 
-## Ollama self-hosted
+## Ollama self-hosted (fully on-prem, open-source)
 - Deploy Ollama as a `Deployment` in the `ollama` namespace using `deploy/helm/charts/ollama/`
-- Recommended models: `llama3:8b` (8GB RAM) or `mistral:7b` (8GB RAM)
-- Node requirement: at least one node with 12GB+ allocatable memory
-- The Ollama pod must be on a dedicated node pool (taint: `ollama=true:NoSchedule`)
+- Recommended models — small (~4B), CPU-friendly, follow the JSON contract well:
+  `qwen2.5:3b` (default, ~4 GB RAM), `qwen3:4b`, `llama3.2:3b`, `gemma2:2b`.
+  Larger models (`llama3:8b`, `mistral:7b`) improve reasoning but need ~8–12 GB.
+- Node requirement: ~4–6 GB allocatable RAM for the default 3B model (no GPU required)
+- The Ollama pod may be pinned to a dedicated node pool (taint: `ollama=true:NoSchedule`)
 - HTTP timeout: 30 seconds (local inference is slower than cloud API)
 - No retry on timeout — return rule-based fallback immediately
+- The request sets `format: "json"` + `temperature: 0`, and the parser tolerates
+  markdown fences / prose, so small models reliably produce the decision object.
+  If parsing still fails, the agent falls back to the deterministic rule engine.
 
 ## Rule-based fallback (always available)
 The `RuleBasedAgent` in `pkg/reasoning/rules.go` handles deterministic cases without any LLM:

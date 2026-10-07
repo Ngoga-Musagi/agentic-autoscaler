@@ -24,15 +24,21 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/fusion"
 )
 
 const (
-	ollamaDefaultModel   = "llama3:8b"
-	ollamaHTTPTimeout    = 30 * time.Second
-	ollamaGeneratePath   = "/api/generate"
+	// ollamaDefaultModel is a small (~3B) instruction-tuned model that runs on
+	// modest on-prem hardware (~4 GB RAM, CPU-only is fine) and follows the
+	// strict JSON contract well. Override via OLLAMA_MODEL or the Helm
+	// ollama.model value — other good small options are qwen3:4b, llama3.2:3b,
+	// and gemma2:2b. Larger models improve reasoning at a RAM/latency cost.
+	ollamaDefaultModel = "qwen2.5:3b"
+	ollamaHTTPTimeout  = 30 * time.Second
+	ollamaGeneratePath = "/api/generate"
 )
 
 // OllamaAgent calls a self-hosted Ollama instance to make scaling decisions.
@@ -87,6 +93,12 @@ func (o *OllamaAgent) buildRequestBody(signal fusion.FusedSignal) ([]byte, error
 		Model:  o.modelName(),
 		Prompt: prompt,
 		Stream: false,
+		// format:json constrains Ollama's sampler to emit syntactically valid
+		// JSON. This is essential for small (~4B) models, which otherwise tend
+		// to wrap the object in prose or markdown fences despite the JSON-only
+		// instruction. temperature 0 makes the structured output deterministic.
+		Format:  "json",
+		Options: &ollamaOptions{Temperature: 0},
 	}
 	return json.Marshal(req)
 }
@@ -132,7 +144,10 @@ func (o *OllamaAgent) parseDecision(raw []byte) (ScaleDecision, error) {
 	}
 
 	var ai aiDecision
-	if err := json.Unmarshal([]byte(envelope.Response), &ai); err != nil {
+	// Small models sometimes wrap the object in markdown fences or prose even
+	// with format:json; extract the JSON object defensively before parsing.
+	jsonStr := extractJSONObject(envelope.Response)
+	if err := json.Unmarshal([]byte(jsonStr), &ai); err != nil {
 		return ScaleDecision{}, fmt.Errorf("parse ai decision JSON %q: %w", envelope.Response, err)
 	}
 
@@ -181,12 +196,45 @@ func (o *OllamaAgent) modelName() string {
 	return ollamaDefaultModel
 }
 
+// extractJSONObject returns the first JSON object found in s, tolerating the
+// markdown code fences and surrounding prose that small models sometimes emit
+// despite format:json and the explicit JSON-only instruction. If no braces are
+// found it returns the trimmed input unchanged so the caller's json.Unmarshal
+// surfaces a clear error.
+func extractJSONObject(s string) string {
+	s = strings.TrimSpace(s)
+	// Strip a leading ```json / ``` fence and its closing ``` if present.
+	if strings.HasPrefix(s, "```") {
+		s = strings.TrimPrefix(s, "```")
+		s = strings.TrimPrefix(s, "json")
+		if i := strings.LastIndex(s, "```"); i >= 0 {
+			s = s[:i]
+		}
+		s = strings.TrimSpace(s)
+	}
+	// Slice from the first "{" to the last "}" to drop any surrounding prose.
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start >= 0 && end > start {
+		return s[start : end+1]
+	}
+	return s
+}
+
 // ---- Ollama API wire types -------------------------------------------------
 
 type ollamaRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
 	Stream bool   `json:"stream"`
+	// Format "json" asks Ollama to constrain output to valid JSON.
+	Format string `json:"format,omitempty"`
+	// Options carries generation parameters (temperature, etc.).
+	Options *ollamaOptions `json:"options,omitempty"`
+}
+
+type ollamaOptions struct {
+	Temperature float64 `json:"temperature"`
 }
 
 type ollamaResponse struct {
