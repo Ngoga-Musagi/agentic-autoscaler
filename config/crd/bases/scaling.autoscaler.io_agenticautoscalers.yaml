@@ -100,6 +100,16 @@ spec:
                     format: int32
                     minimum: 1
                     type: integer
+                  scaleDownQuietWindowMinutes:
+                    default: 15
+                    description: |-
+                      ScaleDownQuietWindowMinutes is how long all signals must stay healthy
+                      (zero severity and CPU < 20%) before the conservative scale-down rule
+                      releases capacity to min+1. Default 15. Lower it for demos or faster
+                      scale-down; raise it to be more conservative.
+                    format: int32
+                    minimum: 1
+                    type: integer
                 type: object
               dryRun:
                 description: |-

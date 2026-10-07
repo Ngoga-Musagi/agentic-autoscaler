@@ -212,3 +212,19 @@ assume a podinfo-style target that exposes `/status/{code}` and `/delay/{seconds
 
 Do not run the load generator in production, and only load-test services you are
 authorised to.
+
+### Watching it scale back down
+
+After you stop the load, the operator releases the capacity it added — once all
+signals have been healthy for the scale-down quiet window. That window defaults
+to **15 minutes**; tune it per-CR with `spec.detection.scaleDownQuietWindowMinutes`
+(minimum 1) if you want faster — or more conservative — scale-down:
+
+```yaml
+spec:
+  detection:
+    scaleDownQuietWindowMinutes: 10   # default 15
+```
+
+The scale-down is conservative by design: it releases to `minReplicas + 1` (one
+replica of headroom above the floor), never below `minReplicas`.

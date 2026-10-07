@@ -79,6 +79,12 @@ ollama:
   model: "qwen2.5:3b"
   # -- Namespace to deploy Ollama into.
   namespace: "ollama"
+  # -- Point the operator at an EXTERNAL Ollama instead of the in-cluster one.
+  # Leave empty to use the bundled sub-chart (ollama.enabled=true). Set to e.g.
+  # http://host.docker.internal:11434 to use an Ollama running natively on the
+  # host — the simplest way to use a desktop/laptop GPU (Ollama uses it
+  # automatically). With this set, keep ollama.enabled=false.
+  baseURL: ""
   image:
     repository: ollama/ollama
     tag: "0.1.44"
@@ -90,6 +96,17 @@ ollama:
     limits:
       cpu: "2"
       memory: "6Gi"
+  # -- GPU acceleration for in-cluster Ollama. enabled=true requests
+  # nvidia.com/gpu (cluster needs the NVIDIA device plugin + a GPU node);
+  # Ollama then uses the GPU automatically and can run larger models. Default
+  # false = CPU-only, portable. See deploy/helm/values-gpu.yaml for a ready
+  # overlay. For a laptop/desktop GPU, running Ollama natively on the host and
+  # pointing the operator at it (OLLAMA_BASE_URL) is simpler — see
+  # docs/on-prem-llm.md.
+  gpu:
+    enabled: false
+    count: 1
+    runtimeClassName: ""
   # -- Node selector applied to the Ollama Pod (GPU / high-memory node pool).
   nodeSelector: {}
   # -- Tolerations for the ollama=true:NoSchedule taint on dedicated nodes.
