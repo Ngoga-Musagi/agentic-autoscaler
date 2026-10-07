@@ -262,11 +262,14 @@ func TestOllamaAgent_RequestConstrainsJSON(t *testing.T) {
 // fences and surrounding prose that small models emit despite format:json.
 func TestOllamaAgent_WrappedJSON_Parsed(t *testing.T) {
 	decision := `{"action":"scale-up","targetReplicas":8,"confidence":0.8,"reason":"pool exhausted"}`
+	braceReason := `{"action":"scale-up","targetReplicas":8,"confidence":0.8,"reason":"pods {app=foo} saturated"}`
 	cases := map[string]string{
-		"markdown fence":     "```json\n" + decision + "\n```",
-		"bare fence":         "```\n" + decision + "\n```",
-		"prose around json":  "Here is my decision:\n" + decision + "\nHope that helps.",
-		"leading whitespace": "   \n" + decision,
+		"markdown fence":        "```json\n" + decision + "\n```",
+		"bare fence":            "```\n" + decision + "\n```",
+		"prose around json":     "Here is my decision:\n" + decision + "\nHope that helps.",
+		"leading whitespace":    "   \n" + decision,
+		"braces in reason":      braceReason,
+		"trailing prose braces": decision + "\n(note: {done})",
 	}
 	for name, wrapped := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -298,6 +301,12 @@ func TestExtractJSONObject(t *testing.T) {
 		{"prefix " + obj + " suffix", obj},
 		{"  " + obj + "  ", obj},
 		{"no json here", "no json here"},
+		// Braces inside a string value must not end the object early.
+		{`{"reason":"a}b"}`, `{"reason":"a}b"}`},
+		// Trailing content with its own braces must be dropped.
+		{obj + " {trailing}", obj},
+		// Escaped quote inside a string is handled.
+		{`{"reason":"say \"hi\" }"}`, `{"reason":"say \"hi\" }"}`},
 	}
 	for _, c := range cases {
 		if got := extractJSONObject(c.in); got != c.want {

@@ -196,9 +196,11 @@ func (o *OllamaAgent) modelName() string {
 	return ollamaDefaultModel
 }
 
-// extractJSONObject returns the first JSON object found in s, tolerating the
-// markdown code fences and surrounding prose that small models sometimes emit
-// despite format:json and the explicit JSON-only instruction. If no braces are
+// extractJSONObject returns the first balanced JSON object found in s, tolerating
+// the markdown code fences and surrounding prose that small models sometimes emit
+// despite format:json and the explicit JSON-only instruction. It scans braces
+// while respecting string literals, so a "{" or "}" inside the reason text — or
+// any prose after the object — does not confuse the boundary. If no object is
 // found it returns the trimmed input unchanged so the caller's json.Unmarshal
 // surfaces a clear error.
 func extractJSONObject(s string) string {
@@ -212,13 +214,38 @@ func extractJSONObject(s string) string {
 		}
 		s = strings.TrimSpace(s)
 	}
-	// Slice from the first "{" to the last "}" to drop any surrounding prose.
 	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start >= 0 && end > start {
-		return s[start : end+1]
+	if start < 0 {
+		return s
 	}
-	return s
+	// Walk from the first "{" tracking brace depth, skipping braces inside string
+	// literals (and their escapes), and return through the matching close brace.
+	depth, inStr, escaped := 0, false, false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			if depth--; depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return s[start:] // unbalanced — let json.Unmarshal surface the error
 }
 
 // ---- Ollama API wire types -------------------------------------------------
