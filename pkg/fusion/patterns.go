@@ -16,7 +16,35 @@ limitations under the License.
 
 package fusion
 
-import "regexp"
+import (
+	"fmt"
+	"regexp"
+)
+
+// CompilePattern builds a Pattern from raw fields, validating the regex,
+// severity, and score. It returns an error rather than panicking so a caller
+// translating user-supplied configuration can skip an invalid entry and carry
+// on — the correlator must never crash on bad configuration.
+//
+// This keeps regex compilation and validation inside the fusion package (where
+// Pattern lives) without pulling in any Kubernetes types: callers pass plain
+// strings and a float, not a CRD object.
+func CompilePattern(name, regex, severity string, score float64) (Pattern, error) {
+	if name == "" {
+		return Pattern{}, fmt.Errorf("log pattern name must not be empty")
+	}
+	if severity != "warning" && severity != "critical" {
+		return Pattern{}, fmt.Errorf("log pattern %q: severity must be \"warning\" or \"critical\", got %q", name, severity)
+	}
+	if score < 0 || score > 1 {
+		return Pattern{}, fmt.Errorf("log pattern %q: score must be in [0,1], got %v", name, score)
+	}
+	re, err := regexp.Compile(regex)
+	if err != nil {
+		return Pattern{}, fmt.Errorf("log pattern %q: invalid regex: %w", name, err)
+	}
+	return Pattern{Name: name, Re: re, Severity: severity, Score: score}, nil
+}
 
 // Pattern is a named log pattern with a compiled regex, severity, and a
 // contribution weight toward the overall SeverityScore.

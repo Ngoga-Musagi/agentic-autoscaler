@@ -156,6 +156,30 @@ func TestExecutor_Execute_DeploymentNotFound_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestExecutor_Execute_EmptyNamespace_ReturnsClearError(t *testing.T) {
+	// A Deployment exists, but the spec carries an empty namespace. Execute must
+	// fail loudly rather than silently looking up namespace "" (T2.1 defense in depth).
+	deploy := makeTestDeployment("payment-service", "production", 3)
+	fc := fake.NewClientBuilder().
+		WithScheme(newTestScheme()).
+		WithObjects(deploy).
+		Build()
+
+	spec := testSpec("payment-service", "") // namespace intentionally empty
+	err := NewExecutor(fc).Execute(context.Background(), spec, scaleUpDecision(8))
+	if err == nil {
+		t.Fatal("Execute: want error for empty namespace, got nil")
+	}
+
+	// The Deployment must be untouched — no scale happened.
+	updated := &appsv1.Deployment{}
+	_ = fc.Get(context.Background(),
+		types.NamespacedName{Name: "payment-service", Namespace: "production"}, updated)
+	if updated.Spec.Replicas == nil || *updated.Spec.Replicas != 3 {
+		t.Errorf("Spec.Replicas: want 3 (unchanged), got %v", updated.Spec.Replicas)
+	}
+}
+
 // ---- KEDAExecutor tests ----------------------------------------------------
 
 func TestKEDAExecutor_Execute_CreatesScaledObject(t *testing.T) {

@@ -1,0 +1,38 @@
+# Owner mode — the agentic autoscaler is the SOLE controller of this Deployment's
+# replicas. Any HPA on the same Deployment must be deleted or suspended, or the
+# two will fight over spec.replicas. Use this only after the operator has run in
+# calibrated mode and its decisions have looked correct for 2+ weeks.
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: payment-service-autoscaler
+  namespace: production
+  labels:
+    app.kubernetes.io/managed-by: agentic-autoscaler
+spec:
+  targetDeployment: payment-service
+  prometheusURL: "http://prometheus-operated.monitoring:9090"
+
+  logSource:
+    type: loki
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{namespace="production", app="payment-service"}'
+
+  minReplicas: 2
+  maxReplicas: 20
+  cooldownSeconds: 120
+
+  # Set to false deliberately, only after reviewing the dry-run decision log.
+  dryRun: false
+
+  hpaCoexistence:
+    mode: owner             # sole controller; no HPA on this Deployment
+
+  aiProvider:
+    provider: anthropic
+    secretRef: ai-provider-secret
+
+  observability:
+    grafanaURL: "http://grafana.monitoring:3000"
+    secretRef: grafana-api-secret

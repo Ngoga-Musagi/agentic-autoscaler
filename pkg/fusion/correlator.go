@@ -43,11 +43,19 @@ const (
 //  2. SeverityScore == 0.0 AND CPU < 20 % → "scale-down"
 //  3. Otherwise → "hold"
 func Correlate(snapshot signals.SystemSnapshot) FusedSignal {
-	counts := matchPatterns(snapshot.LogEntries)
+	return CorrelateWithPatterns(snapshot, DefaultPatterns)
+}
+
+// CorrelateWithPatterns is Correlate against a caller-supplied pattern set,
+// letting the controller extend or override the built-in patterns from the CR
+// spec. Correlate is the common case that passes DefaultPatterns. The patterns
+// slice is treated as read-only and is never retained.
+func CorrelateWithPatterns(snapshot signals.SystemSnapshot, patterns []Pattern) FusedSignal {
+	counts := matchPatterns(snapshot.LogEntries, patterns)
 
 	var matched []PatternMatch
 	var maxScore float64
-	for _, p := range DefaultPatterns {
+	for _, p := range patterns {
 		count, ok := counts[p.Name]
 		if !ok {
 			continue
@@ -75,12 +83,12 @@ func Correlate(snapshot signals.SystemSnapshot) FusedSignal {
 	}
 }
 
-// matchPatterns scans all log entries against every DefaultPattern and returns
+// matchPatterns scans all log entries against every supplied pattern and returns
 // a map from pattern name to the number of entries that matched it.
-func matchPatterns(entries []signals.LogEntry) map[string]int {
+func matchPatterns(entries []signals.LogEntry, patterns []Pattern) map[string]int {
 	counts := make(map[string]int)
 	for _, entry := range entries {
-		for _, p := range DefaultPatterns {
+		for _, p := range patterns {
 			if p.Re.MatchString(entry.Message) {
 				counts[p.Name]++
 			}

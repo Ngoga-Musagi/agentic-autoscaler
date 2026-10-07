@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	scalingv1alpha1 "github.com/Ngoga-Musagi/agentic-autoscaler/api/v1alpha1"
 	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/fusion"
@@ -108,12 +110,12 @@ func makeReconciler(
 	fc := builder.WithRuntimeObjects(rObjs...).Build()
 
 	rec := &AgenticAutoscalerReconciler{
-		Client:         fc,
-		Scheme:         scheme,
+		Client:          fc,
+		Scheme:          scheme,
 		SignalCollector: &staticSignalCollector{},
-		Policy:         policy.NewEnforcer(&noopHPAReader{}),
-		Scaler:         scaler.NewExecutor(fc),
-		Observability:  observability.NewNoopRecorder(),
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
 		NewAgent: func(_ reasoning.Config) reasoning.Agent {
 			return &fixedAgent{decision: decision}
 		},
@@ -261,12 +263,12 @@ func TestReconcile_CRNotFound_ReturnsNil(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(s).Build()
 
 	rec := &AgenticAutoscalerReconciler{
-		Client:         fc,
-		Scheme:         s,
+		Client:          fc,
+		Scheme:          s,
 		SignalCollector: &staticSignalCollector{},
-		Policy:         policy.NewEnforcer(&noopHPAReader{}),
-		Scaler:         scaler.NewExecutor(fc),
-		Observability:  observability.NewNoopRecorder(),
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
 		NewAgent: func(_ reasoning.Config) reasoning.Agent {
 			return &fixedAgent{decision: reasoning.HoldDecision("hold")}
 		},
@@ -292,12 +294,12 @@ func TestReconcile_DeploymentNotFound_RequeusWith30s(t *testing.T) {
 		Build()
 
 	rec := &AgenticAutoscalerReconciler{
-		Client:         fc,
-		Scheme:         s,
+		Client:          fc,
+		Scheme:          s,
 		SignalCollector: &staticSignalCollector{},
-		Policy:         policy.NewEnforcer(&noopHPAReader{}),
-		Scaler:         scaler.NewExecutor(fc),
-		Observability:  observability.NewNoopRecorder(),
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
 		NewAgent: func(_ reasoning.Config) reasoning.Agent {
 			return &fixedAgent{decision: reasoning.HoldDecision("hold")}
 		},
@@ -324,12 +326,12 @@ func TestReconcile_SignalCollectionFailure_RequeusWith30s(t *testing.T) {
 		Build()
 
 	rec := &AgenticAutoscalerReconciler{
-		Client:         fc,
-		Scheme:         s,
+		Client:          fc,
+		Scheme:          s,
 		SignalCollector: &staticSignalCollector{err: &fakeCollectorError{}},
-		Policy:         policy.NewEnforcer(&noopHPAReader{}),
-		Scaler:         scaler.NewExecutor(fc),
-		Observability:  observability.NewNoopRecorder(),
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
 		NewAgent: func(_ reasoning.Config) reasoning.Agent {
 			return &fixedAgent{decision: reasoning.HoldDecision("hold")}
 		},
@@ -372,12 +374,12 @@ func TestReconcile_CooldownActive_DecisionBecomesHold(t *testing.T) {
 		Build()
 
 	rec := &AgenticAutoscalerReconciler{
-		Client:         fc,
-		Scheme:         s,
+		Client:          fc,
+		Scheme:          s,
 		SignalCollector: &staticSignalCollector{},
-		Policy:         policy.NewEnforcer(&noopHPAReader{}),
-		Scaler:         scaler.NewExecutor(fc),
-		Observability:  observability.NewNoopRecorder(),
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
 		NewAgent: func(_ reasoning.Config) reasoning.Agent {
 			return &fixedAgent{decision: scaleUp}
 		},
@@ -484,7 +486,7 @@ func TestReconcile_AuditConfigMapCreated(t *testing.T) {
 	rec := &AgenticAutoscalerReconciler{
 		Client:          fc,
 		Scheme:          s,
-		SignalCollector:  &staticSignalCollector{},
+		SignalCollector: &staticSignalCollector{},
 		Policy:          policy.NewEnforcer(&noopHPAReader{}),
 		Scaler:          scaler.NewExecutor(fc),
 		Observability:   observability.NewConfigMapRecorder(fc),
@@ -573,5 +575,415 @@ func TestReconcile_DeploymentNamespaceFallsBackToCRNamespace(t *testing.T) {
 	_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "production", Name: "autoscaler"}, updated)
 	if updated.Status.CurrentReplicas != 4 {
 		t.Errorf("CurrentReplicas: want 4, got %d", updated.Status.CurrentReplicas)
+	}
+}
+
+// TestReconcile_EmptyNamespace_ScaleUp_PatchesDeployment exercises the *write*
+// path with an empty spec.Namespace (T2.1). Unlike the hold-decision test above,
+// a scale-up reaches the executor, which reads spec.Namespace directly. Before
+// the fix the executor received "" and the Deployment lookup failed, so the scale
+// silently errored; after the fix the controller resolves the namespace on the
+// spec so the Deployment is patched.
+func TestReconcile_EmptyNamespace_ScaleUp_PatchesDeployment(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("autoscaler", "production", "api")
+	aa.Spec.Namespace = "" // omitted — must resolve to the CR namespace on the write path
+	deploy := makeDeployment("api", "production", 4)
+
+	scaleUp := reasoning.ScaleDecision{
+		Action:         "scale-up",
+		TargetReplicas: 8,
+		Confidence:     0.9,
+		Reason:         "high load detected",
+		Timestamp:      newTimestamp(time.Now()),
+	}
+	rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, scaleUp)
+
+	if _, err := rec.Reconcile(context.Background(), reconcileRequest("production", "autoscaler")); err != nil {
+		t.Fatalf("Reconcile: want nil with empty spec.namespace on scale-up, got %v", err)
+	}
+
+	updatedDeploy := &appsv1.Deployment{}
+	if err := rec.Get(context.Background(), types.NamespacedName{Namespace: "production", Name: "api"}, updatedDeploy); err != nil {
+		t.Fatalf("Get Deployment: %v", err)
+	}
+	if updatedDeploy.Spec.Replicas == nil || *updatedDeploy.Spec.Replicas != 8 {
+		t.Errorf("Spec.Replicas: want 8 (scaled with resolved namespace), got %v", updatedDeploy.Spec.Replicas)
+	}
+}
+
+// ---- T2.2: durable sustained-quiet timer -----------------------------------
+
+// snapshotSignalCollector returns a fixed snapshot so a test can inject log
+// entries (to drive pattern matching through fusion.Correlate) and metrics.
+type snapshotSignalCollector struct{ snap signals.SystemSnapshot }
+
+func (s *snapshotSignalCollector) Collect(_ context.Context, _ scalingv1alpha1.AgenticAutoscalerSpec) (signals.SystemSnapshot, error) {
+	return s.snap, nil
+}
+
+func TestReconcile_CleanReconcile_SetsLastCleanSince(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("autoscaler", "default", "my-service") // Status.LastCleanSince nil
+	deploy := makeDeployment("my-service", "default", 5)
+
+	// A pattern-free snapshot → fusion matches nothing → the controller starts
+	// the quiet-window timer.
+	rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, reasoning.HoldDecision("hold"))
+
+	if _, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler")); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	updated := &scalingv1alpha1.AgenticAutoscaler{}
+	_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "autoscaler"}, updated)
+	if updated.Status.LastCleanSince == nil {
+		t.Fatal("Status.LastCleanSince: want non-nil after a pattern-free reconcile, got nil")
+	}
+}
+
+func TestReconcile_PatternPresent_ClearsLastCleanSince(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("autoscaler", "default", "my-service")
+	// Pre-seed the timer as if we had been quiet for a while.
+	past := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	aa.Status.LastCleanSince = &past
+	deploy := makeDeployment("my-service", "default", 5)
+
+	fc := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&scalingv1alpha1.AgenticAutoscaler{}).
+		WithRuntimeObjects(aa, deploy).
+		Build()
+
+	// A snapshot whose log line matches the connection-pool-exhausted pattern.
+	snap := signals.SystemSnapshot{
+		LogEntries: []signals.LogEntry{{Message: "connection pool exhausted after 30s"}},
+	}
+	rec := &AgenticAutoscalerReconciler{
+		Client:          fc,
+		Scheme:          s,
+		SignalCollector: &snapshotSignalCollector{snap: snap},
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
+		NewAgent: func(_ reasoning.Config) reasoning.Agent {
+			return &fixedAgent{decision: reasoning.HoldDecision("hold")}
+		},
+	}
+
+	if _, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler")); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	updated := &scalingv1alpha1.AgenticAutoscaler{}
+	_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "autoscaler"}, updated)
+	if updated.Status.LastCleanSince != nil {
+		t.Errorf("Status.LastCleanSince: want nil after a pattern reappears, got %v", updated.Status.LastCleanSince)
+	}
+}
+
+// TestReconcile_DurableQuietWindow_ScaleDownFires proves the whole point of T2.2:
+// with the timer carried on the CR status, the real rule-based agent (rebuilt
+// fresh each reconcile) fires rule 5 once the 15-minute quiet window has elapsed.
+func TestReconcile_DurableQuietWindow_ScaleDownFires(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("autoscaler", "default", "my-service")
+	// Quiet window already elapsed (persisted from prior reconciles).
+	past := metav1.NewTime(time.Now().Add(-16 * time.Minute))
+	aa.Status.LastCleanSince = &past
+	deploy := makeDeployment("my-service", "default", 5)
+
+	fc := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&scalingv1alpha1.AgenticAutoscaler{}).
+		WithRuntimeObjects(aa, deploy).
+		Build()
+
+	// Clean snapshot: low CPU, no log patterns → severity 0, CPU < 20%.
+	snap := signals.SystemSnapshot{Metrics: signals.MetricSnapshot{CPUUtilPct: 10, LatencyP99Ms: 40}}
+	rec := &AgenticAutoscalerReconciler{
+		Client:          fc,
+		Scheme:          s,
+		SignalCollector: &snapshotSignalCollector{snap: snap},
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
+		// The real rule-based agent — the durable CleanSince must reach it.
+		NewAgent: reasoning.NewRuleBasedAgent,
+	}
+
+	if _, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler")); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	updatedDeploy := &appsv1.Deployment{}
+	_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "my-service"}, updatedDeploy)
+	if updatedDeploy.Spec.Replicas == nil || *updatedDeploy.Spec.Replicas != 3 {
+		t.Errorf("Spec.Replicas: want 3 (min+1, rule 5 fired via durable timer), got %v", updatedDeploy.Spec.Replicas)
+	}
+}
+
+// ---- T3.1: consecutive log-window detection --------------------------------
+
+// TestReconcile_ConsecutiveWindows_CounterIncrementsAndResets pins the
+// controller's half of the gate: the status counter advances by one on each
+// reconcile with a matched pattern and resets to zero on a pattern-free window.
+func TestReconcile_ConsecutiveWindows_CounterIncrementsAndResets(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("autoscaler", "default", "my-service") // counter starts at 0
+	deploy := makeDeployment("my-service", "default", 5)
+
+	fc := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&scalingv1alpha1.AgenticAutoscaler{}).
+		WithRuntimeObjects(aa, deploy).
+		Build()
+
+	// Collector we can flip from pattern-present to clean between reconciles.
+	coll := &snapshotSignalCollector{snap: signals.SystemSnapshot{
+		LogEntries: []signals.LogEntry{{Message: "connection pool exhausted after 30s"}},
+	}}
+	rec := &AgenticAutoscalerReconciler{
+		Client:          fc,
+		Scheme:          s,
+		SignalCollector: coll,
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
+		// Hold decision isolates the counter from any scaling side effects.
+		NewAgent: func(_ reasoning.Config) reasoning.Agent {
+			return &fixedAgent{decision: reasoning.HoldDecision("hold")}
+		},
+	}
+
+	windowCount := func() int32 {
+		u := &scalingv1alpha1.AgenticAutoscaler{}
+		_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "autoscaler"}, u)
+		return u.Status.ConsecutivePatternWindows
+	}
+	req := reconcileRequest("default", "autoscaler")
+
+	// Two pattern-present windows → counter 1 then 2.
+	for want := int32(1); want <= 2; want++ {
+		if _, err := rec.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		if got := windowCount(); got != want {
+			t.Fatalf("ConsecutivePatternWindows after window %d: want %d, got %d", want, want, got)
+		}
+	}
+
+	// A clean window resets the streak to 0.
+	coll.snap = signals.SystemSnapshot{}
+	if _, err := rec.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile (clean): %v", err)
+	}
+	if got := windowCount(); got != 0 {
+		t.Errorf("ConsecutivePatternWindows after clean window: want 0, got %d", got)
+	}
+}
+
+// TestReconcile_ConsecutiveWindows_GatesRule2ScaleUp proves the flagship
+// behaviour end-to-end with the real rule-based agent: with
+// detection.consecutiveWindows=3, a sustained pool-exhausted + high-latency
+// signal must NOT scale up on windows 1 and 2 and MUST scale up on window 3,
+// with a reason that names the gate.
+func TestReconcile_ConsecutiveWindows_GatesRule2ScaleUp(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("autoscaler", "default", "my-service")
+	aa.Spec.Detection.ConsecutiveWindows = 3
+	aa.Spec.CooldownSeconds = 0 // no prior scale; keep cooldown out of the way
+	deploy := makeDeployment("my-service", "default", 5)
+
+	fc := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&scalingv1alpha1.AgenticAutoscaler{}).
+		WithRuntimeObjects(aa, deploy).
+		Build()
+
+	// p99 > 2000ms AND a pool-exhausted log line → rule 2's non-window conditions
+	// are met every window; only the consecutive-window gate holds it back.
+	coll := &snapshotSignalCollector{snap: signals.SystemSnapshot{
+		Metrics:    signals.MetricSnapshot{LatencyP99Ms: 2500},
+		LogEntries: []signals.LogEntry{{Message: "connection pool exhausted after 30s"}},
+	}}
+	rec := &AgenticAutoscalerReconciler{
+		Client:          fc,
+		Scheme:          s,
+		SignalCollector: coll,
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
+		NewAgent:        reasoning.NewRuleBasedAgent,
+	}
+	req := reconcileRequest("default", "autoscaler")
+
+	replicas := func() int32 {
+		d := &appsv1.Deployment{}
+		_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "my-service"}, d)
+		if d.Spec.Replicas == nil {
+			return -1
+		}
+		return *d.Spec.Replicas
+	}
+
+	// Windows 1 and 2: gate not yet met → no scale.
+	for w := 1; w <= 2; w++ {
+		if _, err := rec.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("Reconcile window %d: %v", w, err)
+		}
+		if got := replicas(); got != 5 {
+			t.Fatalf("after window %d: want 5 (gate not met), got %d", w, got)
+		}
+	}
+
+	// Window 3: gate met → rule 2 fires, +50% of 5 = 8.
+	if _, err := rec.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile window 3: %v", err)
+	}
+	if got := replicas(); got != 8 {
+		t.Fatalf("after window 3: want 8 (gate met, rule 2 fired), got %d", got)
+	}
+
+	updated := &scalingv1alpha1.AgenticAutoscaler{}
+	_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "autoscaler"}, updated)
+	if !strings.Contains(updated.Status.LastDecisionReason, "across 3 consecutive windows") {
+		t.Errorf("reason should name the gate that applied, got %q", updated.Status.LastDecisionReason)
+	}
+}
+
+// ---- T3.2: custom / extensible log patterns --------------------------------
+
+// TestReconcile_CustomLogPattern_DrivesScaleUp proves a custom pattern reaches a
+// scaling decision end-to-end: the CR overrides the built-in
+// connection-pool-exhausted regex with its own string, and a log line matching
+// only that custom regex (plus high latency) makes the real rule-based agent
+// fire rule 2.
+func TestReconcile_CustomLogPattern_DrivesScaleUp(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("autoscaler", "default", "my-service")
+	aa.Spec.CooldownSeconds = 0
+	aa.Spec.LogPatterns = []scalingv1alpha1.LogPatternSpec{
+		{Name: "connection-pool-exhausted", Regex: `POOL DRAINED`, Severity: "critical", Score: 90},
+	}
+	deploy := makeDeployment("my-service", "default", 4)
+
+	fc := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&scalingv1alpha1.AgenticAutoscaler{}).
+		WithRuntimeObjects(aa, deploy).
+		Build()
+
+	// Only the custom regex matches this line; the built-in regex would not.
+	snap := signals.SystemSnapshot{
+		Metrics:    signals.MetricSnapshot{LatencyP99Ms: 2500},
+		LogEntries: []signals.LogEntry{{Message: "POOL DRAINED: no slots free"}},
+	}
+	rec := &AgenticAutoscalerReconciler{
+		Client:          fc,
+		Scheme:          s,
+		SignalCollector: &snapshotSignalCollector{snap: snap},
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
+		NewAgent:        reasoning.NewRuleBasedAgent,
+	}
+
+	if _, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler")); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	updatedDeploy := &appsv1.Deployment{}
+	_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "my-service"}, updatedDeploy)
+	if updatedDeploy.Spec.Replicas == nil || *updatedDeploy.Spec.Replicas != 6 {
+		t.Errorf("Spec.Replicas: want 6 (rule 2 fired via custom regex, +50%% of 4), got %v", updatedDeploy.Spec.Replicas)
+	}
+}
+
+// TestReconcile_InvalidCustomPattern_NonFatalAndReported proves the fail-safe
+// contract: an uncompilable custom pattern does not fail the reconcile, is
+// reported in status.logPatternWarnings, and the built-in patterns still run.
+func TestReconcile_InvalidCustomPattern_NonFatalAndReported(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("autoscaler", "default", "my-service")
+	aa.Spec.LogPatterns = []scalingv1alpha1.LogPatternSpec{
+		{Name: "broken", Regex: `[unclosed`, Severity: "warning", Score: 50},
+	}
+	deploy := makeDeployment("my-service", "default", 5)
+
+	fc := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&scalingv1alpha1.AgenticAutoscaler{}).
+		WithRuntimeObjects(aa, deploy).
+		Build()
+
+	// A built-in pattern still matches this line, proving fusion kept running.
+	snap := signals.SystemSnapshot{
+		LogEntries: []signals.LogEntry{{Message: "connection pool exhausted after 30s"}},
+	}
+	rec := &AgenticAutoscalerReconciler{
+		Client:          fc,
+		Scheme:          s,
+		SignalCollector: &snapshotSignalCollector{snap: snap},
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
+		NewAgent: func(_ reasoning.Config) reasoning.Agent {
+			return &fixedAgent{decision: reasoning.HoldDecision("hold")}
+		},
+	}
+
+	if _, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler")); err != nil {
+		t.Fatalf("Reconcile must not fail on an invalid custom pattern, got %v", err)
+	}
+
+	updated := &scalingv1alpha1.AgenticAutoscaler{}
+	_ = rec.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "autoscaler"}, updated)
+	if len(updated.Status.LogPatternWarnings) != 1 {
+		t.Fatalf("LogPatternWarnings: want 1, got %d (%v)",
+			len(updated.Status.LogPatternWarnings), updated.Status.LogPatternWarnings)
+	}
+	if !strings.Contains(updated.Status.LogPatternWarnings[0], "broken") {
+		t.Errorf("warning should name the offending pattern, got %q", updated.Status.LogPatternWarnings[0])
+	}
+	// The built-in pattern still matched, so the quiet-window timer was cleared.
+	if updated.Status.LastCleanSince != nil {
+		t.Error("built-in patterns should still run: a matched pattern must clear LastCleanSince")
+	}
+}
+
+// ---- T2.3: reconcile-storm predicate -----------------------------------------
+
+// TestReconcileTriggerPredicate_FiltersStatusOnlyUpdates pins the watch filter
+// used by SetupWithManager: the operator's own status writes (which never bump
+// generation) must not re-enqueue a reconcile, while spec changes, creates, and
+// deletes still do. This is what prevents the status→watch→reconcile→status storm.
+func TestReconcileTriggerPredicate_FiltersStatusOnlyUpdates(t *testing.T) {
+	base := makeAA("autoscaler", "default", "my-service")
+	base.Generation = 3
+
+	// Status-only change: same generation, different status — must be filtered.
+	oldObj := base.DeepCopy()
+	newObj := base.DeepCopy()
+	newObj.Status.LastDecisionReason = "written by our own status patch"
+	if reconcileTriggerPredicate.Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj}) {
+		t.Error("status-only update (same generation) must be filtered, but it triggered a reconcile")
+	}
+
+	// Spec change: generation bumps — must trigger.
+	specNew := base.DeepCopy()
+	specNew.Generation = 4
+	specNew.Spec.MaxReplicas = 99
+	if !reconcileTriggerPredicate.Update(event.UpdateEvent{ObjectOld: base.DeepCopy(), ObjectNew: specNew}) {
+		t.Error("spec change (generation bumped) must trigger a reconcile, but it was filtered")
+	}
+
+	// Create and delete must always trigger.
+	if !reconcileTriggerPredicate.Create(event.CreateEvent{Object: base.DeepCopy()}) {
+		t.Error("create must trigger a reconcile")
+	}
+	if !reconcileTriggerPredicate.Delete(event.DeleteEvent{Object: base.DeepCopy()}) {
+		t.Error("delete must trigger a reconcile")
 	}
 }

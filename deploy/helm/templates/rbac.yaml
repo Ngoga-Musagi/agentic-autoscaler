@@ -34,6 +34,12 @@ rules:
     resources: ["horizontalpodautoscalers"]
     verbs: ["get", "list", "watch"]
 
+  # List namespaces for the console's Onboard tab (read-only). Without this the
+  # dropdown is empty and the operator logs "namespaces is forbidden" every ~40s.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+
   # KEDA ScaledObject integration (optional, harmless when KEDA is absent).
   - apiGroups: ["keda.sh"]
     resources: ["scaledobjects"]

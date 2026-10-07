@@ -1,0 +1,40 @@
+# Calibrated coexistence — the agentic autoscaler runs INSIDE an existing HPA's
+# bounds, so the HPA stays as a safety net during rollout. The operator's
+# min/max must nest within the HPA's: minReplicas >= HPA minReplicas and
+# maxReplicas <= HPA maxReplicas. The operator reads the HPA (never writes it).
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: payment-service-autoscaler
+  namespace: production
+  labels:
+    app.kubernetes.io/managed-by: agentic-autoscaler
+spec:
+  targetDeployment: payment-service
+  prometheusURL: "http://prometheus-operated.monitoring:9090"
+
+  logSource:
+    type: loki
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{namespace="production", app="payment-service"}'
+
+  # Nested within the HPA envelope below.
+  minReplicas: 3          # >= the HPA's minReplicas
+  maxReplicas: 15         # <= the HPA's maxReplicas
+  cooldownSeconds: 180
+
+  dryRun: true            # observe first; flip to false once decisions look right
+
+  hpaCoexistence:
+    mode: calibrated
+    hpaName: payment-service-hpa
+    hpaNamespace: production
+
+  aiProvider:
+    provider: anthropic
+    secretRef: ai-provider-secret
+
+  observability:
+    grafanaURL: "http://grafana.monitoring:3000"
+    secretRef: grafana-api-secret

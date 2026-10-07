@@ -1,0 +1,32 @@
+# Arm B autoscaler for the A/B experiment: the agentic autoscaler in owner mode,
+# live (dryRun=false), managing the faultgen workload. Uses [1m] rate windows so
+# p99 responds within ~1 min of the incident (the T4.1 demo CR uses [2m]).
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: faultgen-exp-autoscaler
+  namespace: production
+  labels:
+    app.kubernetes.io/managed-by: agentic-autoscaler
+    experiment: timeout-storm-ab
+spec:
+  targetDeployment: faultgen
+  prometheusURL: "http://prometheus-operated.monitoring:9090"
+  metrics:
+    latencyP99:        'histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{service="$TARGET"}[1m])))'
+    errorRate:         'sum(rate(http_requests_total{service="$TARGET",status=~"5.."}[1m])) / clamp_min(sum(rate(http_requests_total{service="$TARGET"}[1m])), 0.001) * 100'
+    requestsPerSecond: 'sum(rate(http_requests_total{service="$TARGET"}[1m]))'
+  logSource:
+    type: loki
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{namespace="production", app="faultgen"}'
+  minReplicas: 2
+  maxReplicas: 10
+  cooldownSeconds: 30
+  dryRun: false                      # owner mode: execute scale actions
+  hpaCoexistence:
+    mode: owner
+  aiProvider:
+    provider: anthropic
+    secretRef: "ai-provider-secret"
