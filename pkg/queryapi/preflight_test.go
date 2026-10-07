@@ -95,6 +95,23 @@ func TestPreflight_PrometheusUnreachable_OKFalse(t *testing.T) {
 	}
 }
 
+func TestPreflight_PrometheusHTTPError_OKFalse(t *testing.T) {
+	// A reachable Prometheus that returns a non-200 (e.g. 500) is not ok.
+	prom := mockQueryServer(t, 0, http.StatusInternalServerError)
+	defer prom.Close()
+
+	s, _ := newTestServer(t, ConsoleConfig{WriteEnabled: true})
+	rec := postPreflight(t, s, `{"prometheusURL":"`+prom.URL+`","promQuery":"up"}`)
+	var resp preflightResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !resp.Prometheus.Checked || resp.Prometheus.OK {
+		t.Errorf("HTTP 500 from prometheus must be checked but not ok, got %+v", resp.Prometheus)
+	}
+	if !strings.Contains(resp.Prometheus.Detail, "500") {
+		t.Errorf("detail should mention the HTTP status, got %q", resp.Prometheus.Detail)
+	}
+}
+
 func TestPreflight_PrometheusReachableNoData_OKButZero(t *testing.T) {
 	prom := mockQueryServer(t, 0, http.StatusOK)
 	defer prom.Close()
