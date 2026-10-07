@@ -130,7 +130,11 @@ func (r *RuleBasedAgent) decide(_ context.Context, s fusion.FusedSignal) (ScaleD
 // CleanSince means patterns are active (or the window has not yet started), so
 // the window is never considered reached.
 func (r *RuleBasedAgent) cleanWindowReached() bool {
-	return r.cfg.CleanSince != nil && time.Since(r.cfg.CleanSince.Time) >= cleanWindowDuration
+	window := r.cfg.CleanWindow
+	if window <= 0 {
+		window = cleanWindowDuration // default 15 minutes
+	}
+	return r.cfg.CleanSince != nil && time.Since(r.cfg.CleanSince.Time) >= window
 }
 
 // consecutiveWindowThreshold returns the effective sustained-window requirement,

@@ -167,6 +167,15 @@ type DetectionConfig struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
 	ConsecutiveWindows int32 `json:"consecutiveWindows,omitempty"`
+
+	// ScaleDownQuietWindowMinutes is how long all signals must stay healthy
+	// (zero severity and CPU < 20%) before the conservative scale-down rule
+	// releases capacity to min+1. Default 15. Lower it for demos or faster
+	// scale-down; raise it to be more conservative.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=15
+	ScaleDownQuietWindowMinutes int32 `json:"scaleDownQuietWindowMinutes,omitempty"`
 }
 
 // AgenticAutoscalerSpec defines the desired state of AgenticAutoscaler.
