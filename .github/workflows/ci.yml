@@ -42,6 +42,12 @@ jobs:
 
   lint:
     name: lint
+    # Lint is a PR gate. only-new-issues diffs findings against the PR base,
+    # which only exists in a pull_request context; on push-to-main there is no
+    # diff, so the action scans the whole tree and flags pre-existing legacy
+    # debt (see the backlog). Run lint on PRs only until that backlog is
+    # cleared, then widen this to push as well.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
