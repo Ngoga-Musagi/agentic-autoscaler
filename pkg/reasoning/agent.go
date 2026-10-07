@@ -142,11 +142,11 @@ func NewAgent(cfg Config) Agent {
 //
 //	AI_PROVIDER          — "anthropic", "openai", "ollama", or "rules" (default: "rules")
 //	ANTHROPIC_API_KEY    — bearer token for the Anthropic API
-//	ANTHROPIC_MODEL      — model identifier (e.g. "claude-sonnet-4-20250514")
+//	ANTHROPIC_MODEL      — model identifier (e.g. "claude-sonnet-5")
 //	OPENAI_API_KEY       — bearer token for the OpenAI API
 //	OPENAI_MODEL         — model identifier (e.g. "gpt-4o")
 //	OLLAMA_BASE_URL      — in-cluster Ollama service URL
-//	OLLAMA_MODEL         — model identifier (e.g. "llama3:8b")
+//	OLLAMA_MODEL         — model identifier (e.g. "qwen2.5:3b")
 func NewAgentFromEnv(cfg Config) Agent {
 	cfg.Provider = envOrDefault("AI_PROVIDER", "rules")
 	switch cfg.Provider {

@@ -216,7 +216,7 @@ func askAI(ctx context.Context, question string, records []observability.Decisio
 	}
 	model := os.Getenv("ANTHROPIC_MODEL")
 	if model == "" {
-		model = "claude-sonnet-4-20250514"
+		model = "claude-sonnet-5"
 	}
 
 	contextJSON, err := json.MarshalIndent(records, "", "  ")

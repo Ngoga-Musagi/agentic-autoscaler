@@ -37,7 +37,7 @@ func TestNewAgentFromEnv_Anthropic_TypeAndCredentials(t *testing.T) {
 	t.Setenv("AI_PROVIDER", "ANTHROPIC_API_KEY")
 	t.Setenv("AI_PROVIDER", "anthropic")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
-	t.Setenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+	t.Setenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 
 	got := NewAgentFromEnv(baseK8sCfg)
 	a, ok := got.(*AnthropicAgent)
@@ -47,8 +47,8 @@ func TestNewAgentFromEnv_Anthropic_TypeAndCredentials(t *testing.T) {
 	if a.cfg.APIKey != "sk-ant-test-key" {
 		t.Errorf("APIKey: want %q, got %q", "sk-ant-test-key", a.cfg.APIKey)
 	}
-	if a.cfg.Model != "claude-sonnet-4-20250514" {
-		t.Errorf("Model: want %q, got %q", "claude-sonnet-4-20250514", a.cfg.Model)
+	if a.cfg.Model != "claude-sonnet-5" {
+		t.Errorf("Model: want %q, got %q", "claude-sonnet-5", a.cfg.Model)
 	}
 	if a.cfg.TargetDeployment != baseK8sCfg.TargetDeployment {
 		t.Errorf("TargetDeployment: want %q, got %q", baseK8sCfg.TargetDeployment, a.cfg.TargetDeployment)

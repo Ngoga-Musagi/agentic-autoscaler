@@ -20,7 +20,7 @@ aiProvider:
   # Not required when provider is "ollama".
   secretRef: "agentic-autoscaler-ai-key"
   # -- Override the model name. When empty the operator picks a safe default
-  # per provider (claude-sonnet-4-20250514 / gpt-4o / llama3:8b).
+  # per provider (claude-sonnet-5 / gpt-4o / qwen2.5:3b).
   model: ""
   # -- Whether the chart creates the API key Secret when it is ABSENT. The chart
   # never reads or overwrites an existing Secret, so a real key survives every
@@ -69,10 +69,14 @@ hpa:
 dryRun: true
 
 ollama:
-  # -- Deploy the bundled Ollama sub-chart. Requires a node with 12 GB+ RAM.
+  # -- Deploy the bundled Ollama sub-chart for fully on-prem, open-source
+  # reasoning (no cloud account). The default model (qwen2.5:3b) runs on a
+  # node with ~4-6 GB allocatable RAM, CPU-only — no GPU required.
   enabled: false
   # -- Ollama model to pull and serve. Must fit in the node's allocatable RAM.
-  model: "llama3:8b"
+  # Small (~4B) options that follow the JSON contract well: qwen2.5:3b (default),
+  # qwen3:4b, llama3.2:3b, gemma2:2b. Larger models need proportionally more RAM.
+  model: "qwen2.5:3b"
   # -- Namespace to deploy Ollama into.
   namespace: "ollama"
   image:
@@ -81,11 +85,11 @@ ollama:
     pullPolicy: IfNotPresent
   resources:
     requests:
-      cpu: "2"
-      memory: "12Gi"
+      cpu: "1"
+      memory: "4Gi"
     limits:
-      cpu: "4"
-      memory: "16Gi"
+      cpu: "2"
+      memory: "6Gi"
   # -- Node selector applied to the Ollama Pod (GPU / high-memory node pool).
   nodeSelector: {}
   # -- Tolerations for the ollama=true:NoSchedule taint on dedicated nodes.
