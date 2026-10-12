@@ -35,8 +35,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 The operator image reference, defaulting tag to .Chart.AppVersion.
 */}}
 {{- define "agentic-autoscaler.image" -}}
+{{- if and .Values.image.digest (not .Values.image.tag) -}}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest }}
+{{- else -}}
 {{- $tag := .Values.image.tag | default .Chart.AppVersion -}}
 {{- printf "%s:%s" .Values.image.repository $tag }}
+{{- end -}}
 {{- end }}
 
 {{/*
