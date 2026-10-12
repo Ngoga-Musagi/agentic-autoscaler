@@ -4,8 +4,14 @@ replicaCount: 1
 image:
   # -- OCI image repository for the operator binary.
   repository: ghcr.io/ngoga-musagi/agentic-autoscaler
-  # -- Image tag. Defaults to the chart appVersion when set to "".
+  # -- Image tag. Defaults to the chart appVersion when set to "". Setting a tag
+  # (e.g. a dev build) overrides the pinned digest below.
   tag: ""
+  # -- Immutable multi-arch manifest digest for the default release. Pinned so
+  # production pulls an exact image, not a moving tag (security.md). Used only
+  # when `tag` is empty; it pins the v0.1.0 index built by the release workflow.
+  # Rotate on each release: `docker buildx imagetools inspect <repo>:<version>`.
+  digest: "sha256:5f1bb06140e5649467a1f439abc863676fd667a6661823bd6b5523558ec1c19d"
   pullPolicy: IfNotPresent
 
 serviceAccount:
