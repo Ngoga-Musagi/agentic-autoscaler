@@ -24,11 +24,15 @@ scaling in calibrated coexistence with your HPA before taking full ownership.
 The operator reads the API key from a Kubernetes Secret at startup. The Secret must
 exist in the operator namespace before the Pod starts — missing it causes a crash loop.
 
+The chart reads the key from the Secret field **`API_KEY`** regardless of provider
+(the operator maps it to `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` internally). Use
+that field name exactly — a differently-named field is what causes the crash loop.
+
 **Anthropic (default):**
 
 ```bash
 kubectl create secret generic ai-provider-secret \
-  --from-literal=ANTHROPIC_API_KEY=<key> \
+  --from-literal=API_KEY=<key> \
   -n agentic-autoscaler-system
 ```
 
@@ -36,7 +40,7 @@ kubectl create secret generic ai-provider-secret \
 
 ```bash
 kubectl create secret generic ai-provider-secret \
-  --from-literal=OPENAI_API_KEY=<key> \
+  --from-literal=API_KEY=<key> \
   -n agentic-autoscaler-system
 ```
 
@@ -57,9 +61,11 @@ below.
 The operator pushes a vertical annotation to Grafana every time it executes a real
 scale action. This shows on-call SREs exactly when and why a scale event happened.
 
+The chart reads the token from the Secret field **`GRAFANA_TOKEN`**:
+
 ```bash
 kubectl create secret generic grafana-api-secret \
-  --from-literal=GRAFANA_API_KEY=<key> \
+  --from-literal=GRAFANA_TOKEN=<key> \
   -n agentic-autoscaler-system
 ```
 
@@ -84,6 +90,11 @@ helm install agentic-autoscaler deploy/helm/ \
   --set grafana.secretRef=grafana-api-secret
 ```
 
+> **Image pinning:** by default the chart pulls the release image by its immutable
+> manifest digest (`image.digest` in `values.yaml`), not a moving tag — the pattern
+> `security.md` requires for production. Override with `--set image.tag=<tag>` only
+> for a dev build; setting a tag supersedes the digest.
+
 Verify the operator is running:
 
 ```bash
@@ -100,19 +111,33 @@ INFO  Reconcile complete  action=hold  deployment=payment-service  [dry-run]
 ### Switching to Ollama
 
 To use a self-hosted Ollama model instead of a cloud API, enable the bundled
-sub-chart and point the operator at it:
+sub-chart and point the operator at it. No Secret is required:
 
 ```bash
 helm upgrade agentic-autoscaler deploy/helm/ \
   --namespace agentic-autoscaler-system \
   --set aiProvider.provider=ollama \
   --set ollama.enabled=true \
-  --set ollama.model=llama3:8b
+  --set ollama.model=qwen2.5:3b
 ```
 
-Ollama requires at least one node with 12 GB+ allocatable memory. The sub-chart
-applies a `ollama=true:NoSchedule` toleration so Ollama Pods land on the dedicated
-node pool without manual scheduling.
+The default model `qwen2.5:3b` runs CPU-only on a node with ~4–6 GB allocatable
+memory — no GPU required. Larger models (`llama3:8b`, `mistral:7b`) improve reasoning
+but need ~8–12 GB. The sub-chart applies a `ollama=true:NoSchedule` toleration so
+Ollama Pods land on a dedicated node pool without manual scheduling.
+
+**GPU acceleration** is optional and comes in two flavours:
+
+- *In-cluster GPU* — install with `-f deploy/helm/values-gpu.yaml`, which requests
+  `nvidia.com/gpu` (needs the NVIDIA device plugin and a GPU node). Ollama then uses
+  the GPU automatically and can serve larger models.
+- *Host-native Ollama* — run `ollama serve` on a host with a GPU and point the
+  operator at it with `--set ollama.enabled=false --set ollama.baseURL=http://host.docker.internal:11434`.
+  This is the simplest way to use a desktop/laptop GPU.
+
+See [`docs/on-prem-llm.md`](on-prem-llm.md) for the full on-prem / GPU walkthrough.
+If the model is unreachable or returns malformed output, the operator falls back to
+the deterministic rule engine — reasoning never blocks a reconcile.
 
 ---
 
