@@ -30,3 +30,7 @@ kubeconfig
 # Test coverage
 coverage.out
 coverage.html
+
+# Helm subchart archives: rebuilt by `helm dependency update` (hack/bootstrap.sh);
+# the source lives unpacked in deploy/helm/charts/<name>/
+deploy/helm/charts/*.tgz
