@@ -1,8 +1,4 @@
 {
-  "__inputs": [
-    { "name": "DS_PROMETHEUS", "label": "Prometheus", "type": "datasource", "pluginId": "prometheus" },
-    { "name": "DS_LOKI",       "label": "Loki",       "type": "datasource", "pluginId": "loki" }
-  ],
   "title": "Agentic Autoscaler — Decision Audit",
   "uid":   "agentic-autoscaler-decisions",
   "tags":  ["agentic-autoscaler", "autoscaling", "decisions"],
@@ -14,6 +10,8 @@
 
   "templating": {
     "list": [
+      { "name": "DS_PROMETHEUS", "label": "Prometheus", "type": "datasource", "query": "prometheus", "hide": 0 },
+      { "name": "DS_LOKI",       "label": "Loki",       "type": "datasource", "query": "loki",       "hide": 0 },
       {
         "name": "deployment", "label": "Deployment",
         "type": "query", "datasource": "${DS_PROMETHEUS}",
@@ -30,7 +28,7 @@
         "datasource": "${DS_LOKI}",
         "enable": true,
         "iconColor": "#6c8fff",
-        "expr": "{app=\"agentic-autoscaler\"} | json | action=~\"scale-up|scale-down\"",
+        "expr": "{app=\"agentic-autoscaler\"} |= \"scale_decision\" | regexp `(?P<payload>\\{.*\\})` | line_format \"{{.payload}}\" | json | action=~\"scale-up|scale-down\"",
         "titleFormat": "{{action}} — {{deployment}}",
         "textFormat": "{{oldReplicas}} → {{newReplicas}} | {{reason}}"
       }
@@ -147,7 +145,7 @@
       ],
       "targets": [{
         "datasource": "${DS_LOKI}",
-        "expr": "{app=\"agentic-autoscaler\", namespace=~\".+\"} | json | deployment=~\"$deployment\" | line_format \"{{.timestamp}}\t{{.deployment}}\t{{.action}}\t{{.oldReplicas}}\t{{.newReplicas}}\t{{.reason}}\t{{.confidence}}\t{{.provider}}\t{{.dryRun}}\"",
+        "expr": "{app=\"agentic-autoscaler\"} |= \"scale_decision\" | regexp `(?P<payload>\\{.*\\})` | line_format \"{{.payload}}\" | json | deployment=~\"$deployment\" | line_format \"{{.timestamp}}\t{{.deployment}}\t{{.action}}\t{{.oldReplicas}}\t{{.newReplicas}}\t{{.reason}}\t{{.confidence}}\t{{.provider}}\t{{.dryRun}}\"",
         "queryType": "range",
         "legendFormat": ""
       }]
@@ -161,8 +159,8 @@
       "fieldConfig": { "defaults": { "color": { "fixedColor": "#6c8fff", "mode": "fixed" } } },
       "targets": [{
         "datasource": "${DS_LOKI}",
-        "expr": "sum by(patterns) ({app=\"agentic-autoscaler\"} | json | patterns != \"\" | action=~\"scale-up|scale-down\")",
-        "queryType": "range",
+        "expr": "sum by(patterns) (count_over_time({app=\"agentic-autoscaler\"} |= \"scale_decision\" | regexp `(?P<payload>\\{.*\\})` | line_format \"{{.payload}}\" | json | deployment=~\"$deployment\" | action=~\"scale-up|scale-down\" | regexp `\"patterns\": \\[(?P<patterns>[^\\]]*)\\]` | patterns != \"\" [$__range]))",
+        "queryType": "instant",
         "legendFormat": "{{patterns}}"
       }]
     },
@@ -175,7 +173,7 @@
       "fieldConfig": { "defaults": { "color": { "fixedColor": "#fbbf24", "mode": "fixed" }, "unit": "percentunit" } },
       "targets": [{
         "datasource": "${DS_LOKI}",
-        "expr": "{app=\"agentic-autoscaler\"} | json | confidence != \"\" | unwrap confidence | __error__=\"\"",
+        "expr": "max_over_time({app=\"agentic-autoscaler\"} |= \"scale_decision\" | regexp `(?P<payload>\\{.*\\})` | line_format \"{{.payload}}\" | json | deployment=~\"$deployment\" | unwrap confidence | __error__=\"\" [$__interval]) by (deployment)",
         "queryType": "range",
         "legendFormat": "confidence"
       }]

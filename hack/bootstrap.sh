@@ -11,7 +11,9 @@
 # in the repo root if present:
 #   ANTHROPIC_API_KEY=sk-ant-...   enables AI reasoning (falls back to rules if unset)
 #   ANTHROPIC_MODEL=...            overrides the model (e.g. claude-sonnet-4-6)
-#   GRAFANA_TOKEN=...              enables Grafana annotation push (optional)
+#   GRAFANA_TOKEN=...              enables Grafana annotation push (optional;
+#                                  GRAFANA_API_KEY is accepted as an alias)
+#   GRAFANA_DASHBOARD_UID=...      attach annotations to one dashboard (optional)
 set -euo pipefail
 
 CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -47,6 +49,9 @@ get_env_val() {  # get_env_val KEY -> value from .env (CR/quote-stripped) or emp
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-$(get_env_val ANTHROPIC_API_KEY)}"
 ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-$(get_env_val ANTHROPIC_MODEL)}"
 GRAFANA_TOKEN="${GRAFANA_TOKEN:-$(get_env_val GRAFANA_TOKEN)}"
+# .env.example names the token GRAFANA_API_KEY (what the operator reads), so accept both.
+GRAFANA_TOKEN="${GRAFANA_TOKEN:-${GRAFANA_API_KEY:-$(get_env_val GRAFANA_API_KEY)}}"
+GRAFANA_DASHBOARD_UID="${GRAFANA_DASHBOARD_UID:-$(get_env_val GRAFANA_DASHBOARD_UID)}"
 
 # ── Tool installer helpers ───────────────────────────────────────────────────
 
@@ -157,6 +162,21 @@ fi
 
 kubectl config use-context kind-agentic-autoscaler-dev
 ok "kubectl context → kind-agentic-autoscaler-dev"
+
+# A reused cluster may have its node container stopped (Docker restart, `docker
+# stop`); kind still lists it, but every kubectl call would get "connection refused".
+NODE_CONTAINER="agentic-autoscaler-dev-control-plane"
+if [ "$(docker inspect -f '{{.State.Running}}' "$NODE_CONTAINER" 2>/dev/null)" = "false" ]; then
+    warn "Cluster container is stopped — starting it"
+    docker start "$NODE_CONTAINER" >/dev/null
+fi
+for _ in $(seq 1 30); do
+    kubectl get namespace default --request-timeout=5s >/dev/null 2>&1 && break
+    sleep 2
+done
+kubectl get namespace default --request-timeout=5s >/dev/null 2>&1 \
+    || die "Kubernetes API not reachable. Try: docker restart $NODE_CONTAINER"
+ok "Kubernetes API reachable"
 
 # ── 2. Install observability stack ───────────────────────────────────────────
 step "2/7  Installing Prometheus + Loki + Grafana  (≈ 4 min)"
@@ -283,6 +303,8 @@ else
     [ -n "$ANTHROPIC_MODEL" ] && EXTRA_SET+=(--set "aiProvider.model=$ANTHROPIC_MODEL")
 fi
 
+[ -n "$GRAFANA_DASHBOARD_UID" ] && EXTRA_SET+=(--set "grafana.dashboardUID=$GRAFANA_DASHBOARD_UID")
+
 if [ "$WITH_LOADGEN" = "1" ]; then
     EXTRA_SET+=(--set console.writeEnabled=true)
     EXTRA_SET+=(--set console.loadgenURL=http://loadgen.loadgen.svc.cluster.local:8080)
@@ -299,6 +321,7 @@ helm upgrade --install agentic-autoscaler deploy/helm/ \
     --set grafana.secretRef=grafana-api-secret \
     --set dryRun=true \
     --set networkPolicy.enabled=false \
+    --set metrics.serviceMonitor.enabled=true \
     "${EXTRA_SET[@]}" \
     --timeout 5m
 

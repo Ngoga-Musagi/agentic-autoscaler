@@ -33,13 +33,17 @@ const collectorHTTPTimeout = 10 * time.Second
 // before it is sent to Prometheus, so a query can be written once and reused.
 const targetToken = "$TARGET"
 
-// Default PromQL for standard Prometheus HTTP instrumentation. These reproduce
-// the operator's original hard-coded queries; $TARGET is the Deployment name.
+// Default PromQL for standard Prometheus HTTP instrumentation; $TARGET is the
+// Deployment name. Each query aggregates to a single series because query()
+// reads only the first result: unaggregated, RPS came from whichever pod/status
+// series sorted first, and the error ratio divided each 5xx series by itself
+// (always 100%). The `>= 0` / `> 0` filters turn an idle service's NaN into an
+// empty result, which query() reports as 0.
 const (
-	defaultLatencyP99Query = `histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{service="$TARGET"}[2m]))`
-	defaultErrorRateQuery  = `rate(http_requests_total{service="$TARGET",status=~"5.."}[2m]) / rate(http_requests_total{service="$TARGET"}[2m]) * 100`
-	defaultCPUQuery        = `avg(rate(container_cpu_usage_seconds_total{pod=~"$TARGET-.*"}[2m])) * 100`
-	defaultRPSQuery        = `rate(http_requests_total{service="$TARGET"}[2m])`
+	defaultLatencyP99Query = `histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{service="$TARGET"}[2m]))) >= 0`
+	defaultErrorRateQuery  = `sum(rate(http_requests_total{service="$TARGET",status=~"5.."}[2m])) / (sum(rate(http_requests_total{service="$TARGET"}[2m])) > 0) * 100`
+	defaultCPUQuery        = `avg(rate(container_cpu_usage_seconds_total{pod=~"$TARGET-.*",container!="",container!="POD"}[2m])) * 100`
+	defaultRPSQuery        = `sum(rate(http_requests_total{service="$TARGET"}[2m]))`
 )
 
 // Queries holds optional PromQL overrides. Any empty field falls back to the

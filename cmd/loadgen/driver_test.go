@@ -111,3 +111,25 @@ func TestDriverSendsAndStops(t *testing.T) {
 		t.Errorf("driver kept sending after stop: %d -> %d", before, after)
 	}
 }
+
+func TestDriverRestartStaysRunning(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	d := NewDriver()
+	defer d.Stop()
+	if err := d.Start(Config{TargetURL: srv.URL, RPS: 50, DurationSec: 5}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	// Replacing a run must not let the old run's teardown mark the new one stopped.
+	if err := d.Start(Config{TargetURL: srv.URL, RPS: 50, DurationSec: 5}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if !d.Status().Running {
+		t.Error("restarted driver should still be running")
+	}
+}

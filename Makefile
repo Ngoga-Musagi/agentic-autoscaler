@@ -164,6 +164,7 @@ dev-deploy: install dev-secrets ## Install CRD + RBAC + operator Deployment.
 		--set grafana.secretRef=grafana-api-secret \
 		--set dryRun=true \
 		--set networkPolicy.enabled=false \
+		--set metrics.serviceMonitor.enabled=true \
 		--wait --timeout 2m
 	kubectl set env deployment/agentic-autoscaler-agentic-autoscaler \
 		OPERATOR_NAMESPACE=$(DEV_NS) -n $(DEV_NS) 2>/dev/null || true

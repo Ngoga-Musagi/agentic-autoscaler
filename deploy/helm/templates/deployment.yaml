@@ -84,6 +84,10 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.grafana.secretRef }}
                   key: GRAFANA_TOKEN
+            {{- with .Values.grafana.dashboardUID }}
+            - name: GRAFANA_DASHBOARD_UID
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             # ---- Console (management + load generation) ---------------------
             - name: CONSOLE_WRITE_ENABLED

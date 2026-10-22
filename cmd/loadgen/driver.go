@@ -58,6 +58,9 @@ type Driver struct {
 	running bool
 	cfg     Config
 	cancel  context.CancelFunc
+	// gen identifies the current run, so a replaced run finishing late does not
+	// mark its successor as stopped.
+	gen uint64
 
 	sent   int64 // atomic
 	errs   int64 // atomic
@@ -101,7 +104,8 @@ func (d *Driver) Start(cfg Config) error {
 	d.cfg = cfg
 	d.cancel = cancel
 	d.running = true
-	go d.run(ctx, cfg)
+	d.gen++
+	go d.run(ctx, cfg, d.gen)
 	return nil
 }
 
@@ -135,11 +139,13 @@ func (d *Driver) Status() Status {
 	}
 }
 
-func (d *Driver) run(ctx context.Context, cfg Config) {
+func (d *Driver) run(ctx context.Context, cfg Config, gen uint64) {
 	defer func() {
 		d.mu.Lock()
-		d.running = false
-		atomic.StoreInt64(&d.curRPS, 0)
+		if d.gen == gen {
+			d.running = false
+			atomic.StoreInt64(&d.curRPS, 0)
+		}
 		d.mu.Unlock()
 	}()
 
@@ -176,6 +182,10 @@ func (d *Driver) run(ctx context.Context, cfg Config) {
 				now := atomic.LoadInt64(&d.sent)
 				atomic.StoreInt64(&d.curRPS, now-prev)
 				prev = now
+				// Kubernetes Services balance per connection, so reused keep-alive
+				// connections would pin all load to the pods that existed when the
+				// run began. Re-dialing each second spreads it onto new replicas.
+				d.client.CloseIdleConnections()
 			}
 		}
 	}()

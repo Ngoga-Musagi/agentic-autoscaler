@@ -1,0 +1,19 @@
+{{- if (.Values.metrics.serviceMonitor | default dict).enabled }}
+# Lets a Prometheus Operator discover and scrape the operator's /metrics endpoint
+# (decision counts, latency, AI errors) that the Grafana dashboard is built on.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "agentic-autoscaler.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentic-autoscaler.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "agentic-autoscaler.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval | default "30s" }}
+{{- end }}

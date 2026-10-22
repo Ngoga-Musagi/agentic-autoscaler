@@ -19,26 +19,31 @@ package observability
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
+// controller-runtime serves /metrics from its own registry, not the client_golang
+// default one, so collectors must be registered there or they are never scraped.
+var factory = promauto.With(ctrlmetrics.Registry)
+
 var (
-	decisionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	decisionsTotal = factory.NewCounterVec(prometheus.CounterOpts{
 		Name: "agentic_autoscaler_decisions_total",
 		Help: "Total scaling decisions made, labelled by action, deployment, and provider.",
 	}, []string{"action", "deployment", "provider"})
 
-	decisionLatencySeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	decisionLatencySeconds = factory.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "agentic_autoscaler_decision_latency_seconds",
 		Help:    "Time from signal collection to policy-enforced decision, per deployment.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"deployment"})
 
-	aiProviderErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	aiProviderErrorsTotal = factory.NewCounterVec(prometheus.CounterOpts{
 		Name: "agentic_autoscaler_ai_provider_errors_total",
 		Help: "Total AI provider errors that triggered a rule-based fallback.",
 	}, []string{"provider"})
 
-	cooldownSkipsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	cooldownSkipsTotal = factory.NewCounterVec(prometheus.CounterOpts{
 		Name: "agentic_autoscaler_cooldown_skips_total",
 		Help: "Total scale actions skipped because the cooldown window was active.",
 	}, []string{"deployment"})

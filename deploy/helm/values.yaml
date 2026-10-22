@@ -49,6 +49,9 @@ grafana:
   createSecret: true
   # -- Grafana token, used only when the chart first creates the Secret.
   token: ""
+  # -- Attach decision annotations to this dashboard UID instead of the whole org.
+  # The bundled dashboard (deploy/grafana/dashboard.json) uses "agentic-autoscaler-decisions".
+  dashboardUID: ""
 
 console:
   # -- Allow the web console (:8090) to create/edit/delete AgenticAutoscaler CRs
@@ -139,6 +142,12 @@ extraEnv: []
 metrics:
   # -- Port the operator exposes Prometheus metrics on.
   port: 8080
+  serviceMonitor:
+    # -- Create a ServiceMonitor so a Prometheus Operator (e.g. kube-prometheus-stack)
+    # scrapes the operator's decision metrics. Requires the monitoring.coreos.com CRDs.
+    enabled: false
+    # -- How often Prometheus scrapes the operator.
+    interval: 30s
 
 networkPolicy:
   # -- Deploy a NetworkPolicy to restrict operator egress to known endpoints.
