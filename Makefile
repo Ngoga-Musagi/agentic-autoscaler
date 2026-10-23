@@ -4,6 +4,18 @@ IMG ?= controller:latest
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.29.0
 
+# controller-gen v0.14's "./..." walk fails on Windows ("no Go files" for any
+# directory without Go sources), so there we name the marker packages directly.
+ifeq ($(OS),Windows_NT)
+GEN_PATHS ?= {./api/v1alpha1,./internal/controller}
+# envtest stops etcd/kube-apiserver with SIGTERM, which Windows cannot deliver,
+# so reap the ones started from bin/k8s once the tests finish.
+ENVTEST_REAP = powershell -NoProfile -Command "Get-Process etcd,kube-apiserver -ErrorAction SilentlyContinue | Where-Object { \$$_.Path -like '*\bin\k8s\*' } | Stop-Process -Force"
+else
+GEN_PATHS ?= ./...
+ENVTEST_REAP = true
+endif
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
 GOBIN=$(shell go env GOPATH)/bin
@@ -46,11 +58,11 @@ help: ## Display this help.
 
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="$(GEN_PATHS)" output:crd:artifacts:config=config/crd/bases
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="$(GEN_PATHS)"
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
@@ -62,7 +74,8 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	rc=0; KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out || rc=$$?; \
+	$(ENVTEST_REAP); exit $$rc
 
 # Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
 .PHONY: test-e2e  # Run the e2e tests against a Kind k8s instance that is spun up.

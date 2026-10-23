@@ -55,8 +55,8 @@ func TestProactiveScaling(t *testing.T) {
 	const (
 		// Scenario parameters
 		initialReplicas  = int32(3)
-		cpuUtilPct       = 45.0  // current CPU — HPA would not fire
-		hpaCPUThreshold  = 70.0  // HPA fires only when CPU exceeds this
+		cpuUtilPct       = 45.0 // current CPU — HPA would not fire
+		hpaCPUThreshold  = 70.0 // HPA fires only when CPU exceeds this
 		latencyP99Ms     = 1800.0
 		logLine          = "connection pool exhausted: max connections reached"
 		targetDeployment = "payment-service"
@@ -168,12 +168,12 @@ func TestProactiveScaling(t *testing.T) {
 	fc := proactiveFakeClient(t, s, aa, deploy)
 
 	rec := &AgenticAutoscalerReconciler{
-		Client:         fc,
-		Scheme:         s,
+		Client:          fc,
+		Scheme:          s,
 		SignalCollector: &staticSignalCollector{snapshot: snap},
-		Policy:         policy.NewEnforcer(&noopHPAReader{}),
-		Scaler:         scaler.NewExecutor(fc),
-		Observability:  observability.NewNoopRecorder(),
+		Policy:          policy.NewEnforcer(&noopHPAReader{}),
+		Scaler:          scaler.NewExecutor(fc),
+		Observability:   observability.NewNoopRecorder(),
 		NewAgent: func(_ reasoning.Config) reasoning.Agent {
 			return &fixedAgent{decision: agentDecision}
 		},

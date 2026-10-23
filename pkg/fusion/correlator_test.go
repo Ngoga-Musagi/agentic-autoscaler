@@ -103,7 +103,7 @@ func TestCorrelate(t *testing.T) {
 			name: "multiple patterns — score is max not sum",
 			snap: snapshot(
 				signals.MetricSnapshot{LatencyP99Ms: 1800, CPUUtilPct: 75},
-				"upstream timeout on checkout",       // score 0.5
+				"upstream timeout on checkout",        // score 0.5
 				"circuit.*open: payment circuit open", // score 0.6
 			),
 			wantRecommendation: "scale-up",

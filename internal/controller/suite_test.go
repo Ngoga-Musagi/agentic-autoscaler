@@ -74,5 +74,10 @@ var _ = BeforeSuite(func() {
 
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
-	Expect(testEnv.Stop()).To(Succeed())
+	err := testEnv.Stop()
+	// envtest stops etcd/kube-apiserver with SIGTERM, which Windows cannot send;
+	// `make test` reaps them there instead, so only assert elsewhere.
+	if runtime.GOOS != "windows" {
+		Expect(err).NotTo(HaveOccurred())
+	}
 })

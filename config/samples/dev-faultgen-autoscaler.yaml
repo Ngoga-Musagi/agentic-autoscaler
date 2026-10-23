@@ -7,8 +7,8 @@
 # scale-up, not an error-rate one.
 #
 # Starts in dryRun (safe): the operator records the scale-up decision + matched
-# pattern without changing replicas. Flip dryRun to false (make storm-live) to
-# see the Deployment actually scale.
+# pattern without changing replicas. Flip dryRun to false (make storm-live, or
+# `bash hack/demo.sh setup`, which also does it) to see the Deployment scale.
 apiVersion: scaling.autoscaler.io/v1alpha1
 kind: AgenticAutoscaler
 metadata:
@@ -20,13 +20,8 @@ spec:
   targetDeployment: faultgen           # scales deploy/faultgen in this namespace
 
   prometheusURL: "http://prometheus-operated.monitoring:9090"
-  # faultgen runs multiple replicas, so the queries aggregate across pods into a
-  # single series (the default per-pod queries would return one series per pod;
-  # the operator reads the first). $TARGET is replaced with targetDeployment.
-  metrics:
-    latencyP99:        'histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="$TARGET"}[2m])) by (le))'
-    errorRate:         'sum(rate(http_requests_total{service="$TARGET",status=~"5.."}[2m])) / clamp_min(sum(rate(http_requests_total{service="$TARGET"}[2m])), 0.001) * 100'
-    requestsPerSecond: 'sum(rate(http_requests_total{service="$TARGET"}[2m]))'
+  # No metrics overrides: the operator's default queries already aggregate
+  # across faultgen's replicas and report 0 (not NaN) while it is idle.
 
   logSource:
     type: loki

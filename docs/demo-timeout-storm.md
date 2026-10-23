@@ -22,6 +22,23 @@ emitting lines the operator would not detect.
 
 ## Run it
 
+No `make` (e.g. Git Bash on Windows)? `hack/demo.sh` runs the same demo, live
+from the start:
+
+```sh
+WITH_LOADGEN=1 bash hack/bootstrap.sh   # base stack + demo workloads (runs demo.sh setup)
+bash hack/demo.sh reset                 # wait for faultgen to sit at its baseline (~3 min)
+bash hack/demo.sh storm-up              # faultgen climbs 2 → 10 within a few minutes
+bash hack/demo.sh watch                 # replicas + the latest decision, every 10 s
+bash hack/demo.sh storm-down            # back down after the 2-min quiet window
+```
+
+Run `reset` a few minutes before presenting: with the fault on, faultgen logs
+pool-exhausted lines even without traffic, so a leftover storm would start the
+climb from a higher replica count.
+
+With `make`:
+
 ```sh
 # Base stack (kind + Prometheus/Loki/Grafana + operator):
 bash hack/bootstrap.sh
@@ -76,9 +93,9 @@ Confirm each stage independently:
 ```
 
 > Notes
-> - faultgen runs multiple replicas, so the CR overrides the p99/error queries to
->   aggregate across pods (`sum by (le) (...)`); the per-pod defaults would return
->   one series per pod and the operator reads the first.
+> - faultgen runs multiple replicas; the operator's default queries aggregate
+>   across pods (`sum by (le) (...)`) and report 0 rather than NaN while idle, so
+>   the CR needs no metrics overrides.
 > - `faultgen` exposes metrics labelled `service="faultgen"` (= the CR's
 >   `$TARGET`) and is scraped by a `ServiceMonitor` (kube-prometheus-stack does
 >   not use `prometheus.io/scrape` annotations).

@@ -55,7 +55,7 @@ var _ = Describe("AgenticAutoscaler Controller (envtest)", func() {
 		rec = &AgenticAutoscalerReconciler{
 			Client:          k8sClient,
 			Scheme:          k8sClient.Scheme(),
-			SignalCollector:  &staticSignalCollector{},
+			SignalCollector: &staticSignalCollector{},
 			Policy:          policy.NewEnforcer(&noopHPAReader{}),
 			Scaler:          scaler.NewExecutor(k8sClient),
 			Observability:   observability.NewNoopRecorder(),

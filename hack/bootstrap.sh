@@ -5,7 +5,7 @@
 #
 # Usage:
 #   bash hack/bootstrap.sh                  # base stack (dry-run, read-only console)
-#   WITH_LOADGEN=1 bash hack/bootstrap.sh   # + load generator, write-mode console, LIVE scaling
+#   WITH_LOADGEN=1 bash hack/bootstrap.sh   # + timeout-storm demo (hack/demo.sh), write-mode console, LIVE scaling
 #
 # Credentials are read from the shell environment, falling back to a .env file
 # in the repo root if present:
@@ -113,6 +113,55 @@ ensure_secret() {  # ensure_secret <name> <key> <value>
         kubectl create secret generic "$name" --from-literal="$key=not-configured" \
             --namespace "$OPERATOR_NS" --dry-run=client -o yaml | kubectl apply -f -
         warn "$name created as placeholder (not-configured)"
+    fi
+}
+
+# A Grafana token only works against the Grafana that minted it, and the dev
+# stack's Grafana keeps no state across pod restarts or a recreated cluster. So
+# check the supplied token against this cluster's Grafana, and mint a
+# service-account token there when it is missing or rejected. Never printed.
+GRAFANA_TOKEN_MINTED=0
+ensure_grafana_token() {
+    local port=13000 pf code sa_id resp api
+    api="http://localhost:$port/api"
+    if ! kubectl -n monitoring rollout status deploy/kube-prometheus-stack-grafana --timeout=180s >/dev/null 2>&1; then
+        warn "Grafana not ready — skipping the token check"
+        return 0
+    fi
+    kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana "$port:80" >/dev/null 2>&1 &
+    pf=$!
+    for _ in $(seq 1 20); do
+        curl -s -o /dev/null "$api/health" && break
+        sleep 1
+    done
+    if [ -n "$GRAFANA_TOKEN" ] && [ "$GRAFANA_TOKEN" != "not-configured" ]; then
+        code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GRAFANA_TOKEN" "$api/search?limit=1")
+        if [ "$code" = "200" ]; then
+            kill "$pf" 2>/dev/null || true
+            ok "Grafana token is valid for this cluster's Grafana"
+            return 0
+        fi
+        warn "Grafana token rejected by this cluster's Grafana (HTTP $code) — minting a new one"
+        GRAFANA_TOKEN=""
+    fi
+    sa_id=$(curl -s -u admin:admin "$api/serviceaccounts/search?query=agentic-autoscaler" \
+        | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
+    if [ -z "$sa_id" ]; then
+        sa_id=$(curl -s -u admin:admin -H 'Content-Type: application/json' \
+            -d '{"name":"agentic-autoscaler","role":"Editor"}' "$api/serviceaccounts" \
+            | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
+    fi
+    if [ -n "$sa_id" ]; then
+        resp=$(curl -s -u admin:admin -H 'Content-Type: application/json' \
+            -d "{\"name\":\"bootstrap-$(date +%s)\"}" "$api/serviceaccounts/$sa_id/tokens")
+        GRAFANA_TOKEN=$(printf '%s' "$resp" | grep -o '"key":"[^"]*"' | cut -d'"' -f4 || true)
+    fi
+    kill "$pf" 2>/dev/null || true
+    if [ -n "$GRAFANA_TOKEN" ]; then
+        GRAFANA_TOKEN_MINTED=1
+        ok "Grafana service-account token minted (stored only in the cluster Secret)"
+    else
+        warn "Could not mint a Grafana token — decision annotations stay disabled"
     fi
 }
 
@@ -254,6 +303,8 @@ else
     warn "Re-run with: ANTHROPIC_API_KEY=sk-ant-... bash hack/bootstrap.sh"
 fi
 
+ensure_grafana_token
+
 # Never overwrite an existing real key with a placeholder.
 ensure_secret ai-provider-secret API_KEY      "$ANTHROPIC_API_KEY"
 ensure_secret grafana-api-secret GRAFANA_TOKEN "$GRAFANA_TOKEN"
@@ -327,6 +378,12 @@ helm upgrade --install agentic-autoscaler deploy/helm/ \
 
 ok "Operator Helm release installed"
 
+# Secret-backed env vars are read at pod start, so a freshly minted token needs
+# a restart even when the Helm release itself did not change.
+if [ "$GRAFANA_TOKEN_MINTED" = "1" ]; then
+    kubectl -n "$OPERATOR_NS" rollout restart "deployment/$DEPLOY_NAME" >/dev/null
+fi
+
 echo "  → Waiting up to 120s for operator rollout..."
 if kubectl rollout status "deployment/$DEPLOY_NAME" \
         -n "$OPERATOR_NS" --timeout=120s 2>/dev/null; then
@@ -383,15 +440,10 @@ ok "AgenticAutoscaler created  (dry-run=true)"
 
 # ── 8. Demo extras (only with WITH_LOADGEN=1) ────────────────────────────────
 if [ "$WITH_LOADGEN" = "1" ]; then
-    step "8  Demo: load generator + live scaling"
+    step "8  Demo: load generator + timeout-storm workload + live scaling"
 
-    echo "  → Building loadgen image..."
-    docker build -f Dockerfile.loadgen -t agentic-autoscaler-loadgen:dev .
-    kind load docker-image agentic-autoscaler-loadgen:dev --name agentic-autoscaler-dev
-    kubectl apply -f deploy/loadgen/loadgen.yaml
-    kubectl -n loadgen rollout status deploy/loadgen --timeout=120s || \
-        warn "loadgen not ready yet — check: kubectl -n loadgen get pods"
-    ok "Load generator deployed"
+    bash hack/demo.sh setup
+    ok "Load generator and faultgen deployed"
 
     echo "  → Switching payment-service-autoscaler to LIVE (dryRun=false, cooldown=60s)..."
     kubectl -n production patch agenticautoscaler payment-service-autoscaler \
@@ -414,9 +466,14 @@ echo "    Console   →  http://localhost:8090"
 echo "    Prometheus→  http://localhost:9090"
 echo ""
 if [ "$WITH_LOADGEN" = "1" ]; then
-    echo "  Drive load (watch replicas climb), e.g.:"
-    echo -e "  ${CYAN}make load-up RPS=300 ERRPCT=15${NC}    (or use the console Load tab)"
-    echo -e "  ${CYAN}make load-down${NC}                    (stop → scales back down)"
+    echo "  Run the timeout-storm demo (log pattern + latency → scale up, then down):"
+    echo -e "  ${CYAN}bash hack/demo.sh reset${NC}        (wait for the baseline, ~3 min)"
+    echo -e "  ${CYAN}bash hack/demo.sh storm-up${NC}     (faultgen climbs 2 → 10)"
+    echo -e "  ${CYAN}bash hack/demo.sh watch${NC}        (replicas + latest decision)"
+    echo -e "  ${CYAN}bash hack/demo.sh storm-down${NC}   (back down after ~2 min of quiet)"
+    echo ""
+    echo "  payment-service load from the console Load tab is error traffic, not"
+    echo "  overload, so the operator correctly holds there."
     echo ""
 else
     echo "  This is the BASE stack (dry-run, read-only console)."

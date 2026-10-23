@@ -268,7 +268,7 @@ func intMakeRec() *AgenticAutoscalerReconciler {
 	return &AgenticAutoscalerReconciler{
 		Client:          k8sClient,
 		Scheme:          nil, // Scheme is only used in SetupWithManager, not in Reconcile
-		SignalCollector:  NewDefaultSignalCollector(),
+		SignalCollector: NewDefaultSignalCollector(),
 		Policy:          policy.NewEnforcer(&k8sHPAReader{client: k8sClient}),
 		Scaler:          scaler.NewExecutor(k8sClient),
 		Observability:   observability.NewNoopRecorder(),
