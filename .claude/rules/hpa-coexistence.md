@@ -5,7 +5,25 @@ This rule applies whenever touching `pkg/policy/`, `api/v1alpha1/types.go`, or a
 ## The problem
 If both HPA and the agentic autoscaler target the same `Deployment`, they write to the same `spec.replicas` field and will fight each other. The agentic autoscaler scales up → HPA scales down a moment later → thrash.
 
-## The two safe coexistence modes
+## The coexistence modes
+
+Mode B below keeps the operator's target inside the HPA's bounds, but both controllers still write `spec.replicas`, so a live HPA undoes the operator's scale-ups. When an HPA or KEDA ScaledObject is actively scaling the Deployment, use **Mode C (advisor)**.
+
+### Mode C — Advisor (HPA/KEDA stays the only writer)
+The operator never writes `spec.replicas`. It publishes its policy-enforced recommendation as `agentic_autoscaler_recommended_replicas{autoscaler_namespace,autoscaler,deployment_namespace,deployment}` and the user's HPA (External metric, `averageValue: "1"`) or KEDA ScaledObject (prometheus trigger, `threshold: "1"`) scales on it alongside CPU. The HPA takes the max across metrics, so the two can never fight.
+
+```yaml
+spec:
+  targetDeployment: payment-service
+  hpaCoexistence:
+    mode: "advisor"
+```
+
+Invariants (enforced in `internal/controller`, tested in `advisor_test.go`):
+1. Advisor mode never calls the scaler.
+2. A hold keeps the previous recommendation; the first recommendation is `minReplicas`.
+3. The series is deleted when the CR is deleted, leaves advisor mode, or is in `dryRun` — a stale value must never pin an HPA's floor.
+4. A changed recommendation sets `status.lastScaleTime`, so cooldown applies exactly as in owner mode.
 
 ### Mode A — Agentic owns the deployment (HPA disabled)
 The agentic autoscaler takes full control. HPA is deleted or suspended for this deployment.

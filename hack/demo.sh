@@ -10,6 +10,8 @@
 #   bash hack/demo.sh storm-down   # clear the storm and stop traffic
 #   bash hack/demo.sh status       # replicas + latest decision
 #   bash hack/demo.sh watch        # status every 10 s (Ctrl-C to stop)
+#   bash hack/demo.sh advisor-on   # KEDA scales faultgen on CPU + the agent's metric
+#   bash hack/demo.sh advisor-off  # back to owner mode (the operator patches replicas)
 #
 # Knobs: RPS (default 100), DURATION seconds (600), QUIET scale-down window in
 # minutes (2), MAX_REPLICAS (10).
@@ -43,11 +45,14 @@ replicas() { kubectl -n "$NS" get deploy faultgen -o jsonpath='{.spec.replicas}'
 min_replicas() { kubectl -n "$NS" get agenticautoscaler faultgen-autoscaler -o jsonpath='{.spec.minReplicas}'; }
 
 status() {
-    local ready reason
+    local ready reason mode
     ready=$(kubectl -n "$NS" get deploy faultgen -o jsonpath='{.status.readyReplicas}/{.spec.replicas}')
     reason=$(kubectl -n "$NS" get agenticautoscaler faultgen-autoscaler \
         -o jsonpath='{.status.lastDecisionReason}')
-    echo -e "$(date +%H:%M:%S)  faultgen ${CYAN}${ready}${NC} ready  │  ${reason:0:150}"
+    mode=$(kubectl -n "$NS" get agenticautoscaler faultgen-autoscaler \
+        -o jsonpath='{.spec.hpaCoexistence.mode}{" rec="}{.status.recommendedReplicas}')
+    [[ "$mode" == advisor* ]] || mode=""
+    echo -e "$(date +%H:%M:%S)  faultgen ${CYAN}${ready}${NC} ready ${mode:+(${mode}) }│  ${reason:0:150}"
 }
 
 setup() {
@@ -113,12 +118,38 @@ reset() {
     ok "Baseline reached — ready for: bash hack/demo.sh storm-up"
 }
 
+advisor_on() {
+    if ! kubectl get crd scaledobjects.keda.sh >/dev/null 2>&1; then
+        echo "  → Installing KEDA (pinned 2.15.1) into namespace keda..."
+        helm repo add kedacore https://kedacore.github.io/charts >/dev/null 2>&1 || true
+        helm repo update kedacore >/dev/null
+        helm upgrade --install keda kedacore/keda --version 2.15.1 \
+            -n keda --create-namespace --wait --timeout 5m >/dev/null
+    fi
+    kubectl -n "$NS" patch agenticautoscaler faultgen-autoscaler --type merge \
+        -p '{"spec":{"hpaCoexistence":{"mode":"advisor"}}}'
+    kubectl apply -f deploy/advisor/faultgen-scaledobject.yaml
+    ok "Advisor mode: the operator publishes a recommendation, KEDA's HPA scales on max(CPU, recommendation)."
+    echo "  Inspect: kubectl -n $NS get hpa keda-hpa-faultgen   (two metrics, one controller)"
+}
+
+advisor_off() {
+    # Deleting the ScaledObject removes the HPA KEDA created; replicas stay where
+    # they are until the operator, now the sole owner again, decides.
+    kubectl delete -f deploy/advisor/faultgen-scaledobject.yaml --ignore-not-found
+    kubectl -n "$NS" patch agenticautoscaler faultgen-autoscaler --type merge \
+        -p '{"spec":{"hpaCoexistence":{"mode":"owner"}}}'
+    ok "Owner mode restored: the operator patches faultgen replicas directly."
+}
+
 case "${1:-}" in
     setup)      setup ;;
+    advisor-on)  advisor_on ;;
+    advisor-off) advisor_off ;;
     reset)      reset ;;
     storm-up)   storm_up ;;
     storm-down) storm_down ;;
     status)     status ;;
     watch)      while :; do status; sleep 10; done ;;
-    *)          sed -n '2,16p' "$0"; exit 1 ;;
+    *)          sed -n '2,18p' "$0"; exit 1 ;;
 esac

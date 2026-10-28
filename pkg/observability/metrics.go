@@ -47,6 +47,13 @@ var (
 		Name: "agentic_autoscaler_cooldown_skips_total",
 		Help: "Total scale actions skipped because the cooldown window was active.",
 	}, []string{"deployment"})
+
+	// Labels avoid "namespace" because Prometheus rewrites a scraped namespace
+	// label to exported_namespace, which would break copy-pasted HPA/KEDA queries.
+	recommendedReplicas = factory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "agentic_autoscaler_recommended_replicas",
+		Help: "Advisor mode: replica recommendation for an HPA or KEDA ScaledObject (target averageValue 1).",
+	}, []string{"autoscaler_namespace", "autoscaler", "deployment_namespace", "deployment"})
 )
 
 // RecordDecision increments decisions_total and observes decision_latency_seconds.
@@ -64,4 +71,20 @@ func RecordAIProviderError(provider string) {
 // RecordCooldownSkip increments cooldown_skips_total for the given deployment.
 func RecordCooldownSkip(deployment string) {
 	cooldownSkipsTotal.WithLabelValues(deployment).Inc()
+}
+
+// SetRecommendedReplicas publishes an advisor-mode recommendation for the
+// autoscaler's target Deployment.
+func SetRecommendedReplicas(autoscalerNS, autoscaler, deploymentNS, deployment string, replicas int32) {
+	recommendedReplicas.WithLabelValues(autoscalerNS, autoscaler, deploymentNS, deployment).Set(float64(replicas))
+}
+
+// ClearRecommendedReplicas removes every recommendation series for the
+// autoscaler. A series left behind after the CR is deleted, switched out of
+// advisor mode or put in dry-run would keep pinning the consuming HPA's floor.
+func ClearRecommendedReplicas(autoscalerNS, autoscaler string) {
+	recommendedReplicas.DeletePartialMatch(prometheus.Labels{
+		"autoscaler_namespace": autoscalerNS,
+		"autoscaler":           autoscaler,
+	})
 }

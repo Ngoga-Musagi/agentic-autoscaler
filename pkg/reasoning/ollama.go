@@ -169,11 +169,11 @@ func (o *OllamaAgent) parseDecision(raw []byte) (ScaleDecision, error) {
 // replica counts, or confidence values outside [0, 1].
 func (o *OllamaAgent) validateDecision(d aiDecision) error {
 	switch d.Action {
-	case "scale-up", "scale-down", "hold":
+	case "scale-up", "scale-down", ActionHold:
 	default:
 		return fmt.Errorf("unknown action %q", d.Action)
 	}
-	if d.Action != "hold" {
+	if d.Action != ActionHold {
 		if d.TargetReplicas < o.cfg.MinReplicas || d.TargetReplicas > o.cfg.MaxReplicas {
 			return fmt.Errorf("targetReplicas %d out of bounds [%d, %d]",
 				d.TargetReplicas, o.cfg.MinReplicas, o.cfg.MaxReplicas)

@@ -23,6 +23,8 @@ import (
 // LogSourceConfig defines the log collection backend.
 type LogSourceConfig struct {
 	// Type is the log source type; must be "loki" or "kafka".
+	// "kafka" is reserved for a roadmap collector: it is accepted today but no
+	// logs are read, so the operator decides on metrics alone.
 	// +kubebuilder:validation:Enum=loki;kafka
 	Type string `json:"type"`
 
@@ -75,9 +77,17 @@ type AIProviderConfig struct {
 
 // HPACoexistence controls conflict avoidance when an HPA also targets this Deployment.
 type HPACoexistence struct {
-	// Mode is either "owner" (agentic autoscaler is sole controller) or
-	// "calibrated" (operates inside the HPA's replica envelope as a safety net).
-	// +kubebuilder:validation:Enum=owner;calibrated
+	// Mode is one of:
+	//   - "owner": the agentic autoscaler is the sole controller and patches
+	//     spec.replicas directly.
+	//   - "calibrated": it patches spec.replicas, clamped inside a live HPA's
+	//     min/max envelope.
+	//   - "advisor": it never writes spec.replicas. It publishes its
+	//     recommendation as the agentic_autoscaler_recommended_replicas metric,
+	//     and an existing HPA (via an external metric) or KEDA ScaledObject scales
+	//     on it. The HPA takes the max across its metrics, so CPU scaling keeps
+	//     working and the two controllers can never fight.
+	// +kubebuilder:validation:Enum=owner;calibrated;advisor
 	Mode string `json:"mode"`
 
 	// HPAName is the name of the HorizontalPodAutoscaler to coexist with.
@@ -260,9 +270,16 @@ type AgenticAutoscalerStatus struct {
 	LastDecisionReason string `json:"lastDecisionReason,omitempty"`
 
 	// HPACoexistenceStatus reflects the current HPA coexistence mode:
-	// "owner", "calibrated", or "conflict-detected".
+	// "owner", "calibrated", "advisor", or "conflict-detected".
 	// +optional
 	HPACoexistenceStatus string `json:"hpaCoexistenceStatus,omitempty"`
+
+	// RecommendedReplicas is the replica count published to the
+	// agentic_autoscaler_recommended_replicas metric in advisor mode. It holds
+	// its value across hold decisions and operator restarts. Zero outside
+	// advisor mode.
+	// +optional
+	RecommendedReplicas int32 `json:"recommendedReplicas,omitempty"`
 
 	// ObservedGeneration is the .metadata.generation this status was produced from.
 	// +optional
@@ -298,6 +315,8 @@ type AgenticAutoscalerStatus struct {
 //+kubebuilder:printcolumn:name="Min",type=integer,JSONPath=`.spec.minReplicas`
 //+kubebuilder:printcolumn:name="Max",type=integer,JSONPath=`.spec.maxReplicas`
 //+kubebuilder:printcolumn:name="Current",type=integer,JSONPath=`.status.currentReplicas`
+//+kubebuilder:printcolumn:name="Recommended",type=integer,JSONPath=`.status.recommendedReplicas`,priority=1
+//+kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.hpaCoexistence.mode`
 //+kubebuilder:printcolumn:name="DryRun",type=boolean,JSONPath=`.spec.dryRun`
 //+kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

@@ -16,7 +16,11 @@ limitations under the License.
 
 package observability
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
+)
 
 func TestRecordDecision_DoesNotPanic(t *testing.T) {
 	RecordDecision("scale-up", "payment-service", "rule-based", 0.1)
@@ -33,4 +37,21 @@ func TestRecordAIProviderError_DoesNotPanic(t *testing.T) {
 func TestRecordCooldownSkip_DoesNotPanic(t *testing.T) {
 	RecordCooldownSkip("payment-service")
 	RecordCooldownSkip("checkout")
+}
+
+func TestRecommendedReplicas_SetAndClear(t *testing.T) {
+	series := func() float64 {
+		return testutil.ToFloat64(recommendedReplicas.WithLabelValues("prod", "web-autoscaler", "prod", "web"))
+	}
+	SetRecommendedReplicas("prod", "web-autoscaler", "prod", "web", 7)
+	if got := series(); got != 7 {
+		t.Fatalf("recommended replicas: want 7, got %v", got)
+	}
+	SetRecommendedReplicas("prod", "other", "prod", "other", 3)
+
+	ClearRecommendedReplicas("prod", "web-autoscaler")
+	if n := testutil.CollectAndCount(recommendedReplicas); n != 1 {
+		t.Errorf("after clear: want only the other autoscaler's series, got %d series", n)
+	}
+	ClearRecommendedReplicas("prod", "other")
 }

@@ -1,0 +1,53 @@
+# Advisor mode with KEDA — the operator recommends, KEDA's HPA scales.
+#
+# With spec.hpaCoexistence.mode: advisor the operator never writes
+# spec.replicas. It publishes agentic_autoscaler_recommended_replicas on its
+# /metrics endpoint (scraped by Prometheus through the chart's ServiceMonitor),
+# and this ScaledObject feeds it to the HPA that KEDA manages.
+#
+# Why this cannot fight: the HPA computes one desired count per trigger and
+# takes the MAX. CPU keeps working exactly as before; the agent can only raise
+# the floor when application signals (latency, log patterns) say so.
+#
+# The prometheus trigger uses threshold "1" with the default AverageValue
+# metric type, so desired replicas = ceil(recommendation / 1) = recommendation.
+#
+# Used by `bash hack/demo.sh advisor-on`. Requires KEDA >= 2.10.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: faultgen
+  namespace: production
+spec:
+  scaleTargetRef:
+    name: faultgen
+  minReplicaCount: 2
+  maxReplicaCount: 10
+  pollingInterval: 15
+  triggers:
+    # The existing, trusted signal: CPU scaling at 70% of faultgen's 50m request.
+    # On a cluster with metrics-server this is simply:
+    #   - type: cpu
+    #     metricType: Utilization
+    #     metadata: { value: "70" }
+    # kind ships without metrics-server, so the demo computes the same thing
+    # from the cAdvisor series Prometheus already scrapes:
+    # desired = ceil(total cores / 0.035).
+    - type: prometheus
+      name: cpu
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring:9090
+        query: sum(rate(container_cpu_usage_seconds_total{namespace="production",pod=~"faultgen-.*",container="faultgen"}[2m]))
+        threshold: "0.035"
+        ignoreNullValues: "true"
+    # The agent's recommendation. max() keeps the query single-series even if
+    # the operator is briefly scraped twice during a rollout.
+    - type: prometheus
+      name: agentic
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring:9090
+        query: max(agentic_autoscaler_recommended_replicas{deployment_namespace="production",deployment="faultgen"})
+        threshold: "1"
+        # No series (operator down, CR deleted, dry-run) yields 0, so the HPA
+        # falls back to CPU and minReplicaCount instead of erroring.
+        ignoreNullValues: "true"

@@ -43,10 +43,11 @@ overstated:
 | Prometheus + Loki signal collection → `SystemSnapshot` | Implemented · Tested |
 | Typed signal fusion + log-pattern matching → `FusedSignal` | Implemented · Tested |
 | Rule-based reasoning agent (offline, deterministic) | Implemented · Tested |
-| Cloud LLM providers (Anthropic, OpenAI) | Implemented · Tested |
+| Cloud LLM providers (Anthropic, OpenAI Chat Completions) | Implemented · Tested |
 | Self-hosted Ollama provider | Implemented · Tested |
 | Fail-safe degradation (AI error → rules → `hold`) | Implemented · Tested |
 | Policy: min/max bounds + cooldown enforcement | Implemented · Tested |
+| HPA advisor mode (recommendation metric consumed by your HPA/KEDA; never writes replicas) | Implemented · Tested |
 | HPA calibrated coexistence (nested bounds, read-only HPA) | Implemented · Tested |
 | Deployment scaler (merge-patch `spec.replicas` only) | Implemented · Tested |
 | Decision audit log (ConfigMap) | Implemented · Tested |
@@ -54,6 +55,7 @@ overstated:
 | Natural-language decision explanations | Implemented · Tested |
 | Web console (explore / onboard / manage / load) | Implemented · Observed |
 | KEDA `ScaledObject` executor | Implemented · Tested — not yet selectable via `spec` (Roadmap) |
+| Kafka log source | Roadmap — the CRD accepts `logSource.type: kafka`, but no collector exists yet, so such a CR runs on metrics only |
 | Detection across *N consecutive log windows* | Implemented · Tested |
 | Custom log patterns via the CR spec | Implemented · Tested |
 | Sustained-quiet scale-down (rule 5) across reconciles | Implemented · Tested |
@@ -84,9 +86,11 @@ bootstrap. New here? Use the one command above.
 > there is no implicit or global behavior.
 
 > [!NOTE]
-> Calibrated HPA coexistence is the **recommended** mode for initial rollout, but
-> it is not a default — the CRD has no default for `spec.hpaCoexistence.mode`, so
-> set it explicitly (`owner` or `calibrated`) on each CR.
+> If an HPA or KEDA ScaledObject already scales the Deployment, use **`advisor`**
+> mode: the operator publishes a recommendation metric and your HPA scales on
+> max(CPU, recommendation), so the two never fight. The CRD has no default for
+> `spec.hpaCoexistence.mode`, so set it explicitly (`advisor`, `calibrated` or
+> `owner`) on each CR. See [docs/integrating-existing-infra.md](docs/integrating-existing-infra.md#hpa-coexistence).
 
 ### Option A — Full stack on kind (recommended)
 
@@ -340,7 +344,7 @@ Common chart values (full list in `deploy/helm/values.yaml`):
 |-------|---------|---------|
 | `aiProvider.provider` | `anthropic` | `anthropic` \| `openai` \| `ollama` |
 | `aiProvider.secretRef` | `agentic-autoscaler-ai-key` | Secret holding `API_KEY` |
-| `hpa.coexistenceMode` | `calibrated` | `calibrated` (nested in HPA bounds) or `owner` |
+| `hpa.coexistenceMode` | `calibrated` | `advisor` (your HPA/KEDA scales on our metric), `calibrated` (nested in HPA bounds) or `owner` |
 | `dryRun` | `true` | Log decisions without applying them |
 | `ollama.enabled` | `false` | Deploy the bundled Ollama sub-chart |
 | `ollama.model` | `llama3:8b` | Self-hosted model to serve |

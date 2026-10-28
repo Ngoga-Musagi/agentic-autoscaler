@@ -189,9 +189,35 @@ scales up on pool exhaustion + high p99 latency).
 
 ### HPA coexistence
 
-If an HPA already targets the Deployment, start in `calibrated` mode so the
-agentic autoscaler operates **inside** the HPA's bounds (the HPA stays as a
-safety net). Promote to `owner` only after the decision log looks correct. See
+If an HPA or KEDA `ScaledObject` already targets the Deployment, use
+**`advisor` mode**. It is the only mode in which two controllers never write
+`spec.replicas`:
+
+| Mode | Who writes `spec.replicas` | Use when |
+|------|----------------------------|----------|
+| `advisor` | your HPA / KEDA only | an HPA or ScaledObject already owns the Deployment (most clusters) |
+| `calibrated` | the operator, clamped to the HPA's min/max | no autoscaler acts on the Deployment yet, but you want its bounds enforced |
+| `owner` | the operator only | no HPA at all |
+
+In advisor mode the operator publishes its policy-enforced recommendation as
+`agentic_autoscaler_recommended_replicas{deployment_namespace,deployment}` on
+`/metrics`. Add it as one more metric on the autoscaler you already run:
+
+- **KEDA:** a `prometheus` trigger with `threshold: "1"` next to your CPU
+  trigger — see [`deploy/advisor/faultgen-scaledobject.yaml`](../deploy/advisor/faultgen-scaledobject.yaml).
+- **Plain HPA:** an `External` metric with `averageValue: "1"` via
+  prometheus-adapter — see [`deploy/advisor/hpa-external-metric.yaml`](../deploy/advisor/hpa-external-metric.yaml).
+
+The HPA scales to the **max** across its metrics, so CPU scaling keeps working
+unchanged and the agent can only raise the floor when latency or log patterns
+call for it. Failure is safe by construction: if the operator stops, its CR is
+deleted, or it is put back in `dryRun`, the series disappears and the HPA falls
+back to CPU and its own `minReplicas`.
+
+`calibrated` mode does **not** stop a live HPA from undoing a scale-up: both
+controllers write `spec.replicas`, and the HPA soon scales back to what its
+own metrics say (subject to its scale-down stabilization). Use it only when no other
+autoscaler is acting on the Deployment. See
 [.claude/rules/hpa-coexistence.md](../.claude/rules/hpa-coexistence.md).
 
 ## 4. Generate load against any service

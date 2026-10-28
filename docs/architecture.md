@@ -10,7 +10,7 @@ Grafana annotation so a human can read *why* it acted.
 flowchart LR
     subgraph SRC["1 · Sources"]
         P["Prometheus<br/>(metrics)"]
-        L["Loki / Kafka<br/>(log streams)"]
+        L["Loki<br/>(log streams; Kafka: roadmap)"]
     end
     SIG["2 · pkg/signals<br/><b>SystemSnapshot</b><br/>metrics + log entries"]
     FUS["3 · pkg/fusion<br/><b>FusedSignal</b><br/>matched patterns + severity"]
@@ -38,7 +38,7 @@ flowchart LR
 
 | # | Package | Input | Output | Fails safe by |
 |---|---------|-------|--------|---------------|
-| 1 | (sources) | Prometheus HTTP API, Loki/Kafka | raw samples + log lines | signal error → back off and requeue, no decision |
+| 1 | (sources) | Prometheus HTTP API, Loki (Kafka: roadmap) | raw samples + log lines | signal error → back off and requeue, no decision |
 | 2 | `pkg/signals` | CR `prometheusURL`, `logSource`, `metrics` overrides | `SystemSnapshot{Metrics, LogEntries}` | per-CR `$TARGET` PromQL; pure I/O, no cluster writes |
 | 3 | `pkg/fusion` | `SystemSnapshot` + patterns | `FusedSignal{Snapshot, MatchedPatterns, SeverityScore, Recommendation}` | **zero Kubernetes deps**; invalid custom regex skipped, not fatal |
 | 4 | `pkg/reasoning` | `FusedSignal` + bounds/counters | `ScaleDecision{Action, TargetReplicas, Reason, …}` | any provider error → rule-based agent → `hold`; never crashes |

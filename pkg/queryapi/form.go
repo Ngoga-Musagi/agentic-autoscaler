@@ -131,13 +131,13 @@ func (r *OnboardRequest) Validate() error {
 	}
 
 	switch s.HPACoexistence.Mode {
-	case "owner":
+	case "owner", "advisor":
 	case "calibrated":
 		if strings.TrimSpace(s.HPACoexistence.HPAName) == "" {
 			return fmt.Errorf("hpaCoexistence.hpaName is required in calibrated mode")
 		}
 	default:
-		return fmt.Errorf("hpaCoexistence.mode must be owner or calibrated")
+		return fmt.Errorf("hpaCoexistence.mode must be owner, calibrated or advisor")
 	}
 
 	if strings.TrimSpace(s.Observability.GrafanaURL) == "" {

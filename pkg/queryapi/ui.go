@@ -93,6 +93,7 @@ var uiHTML = []byte(`<!DOCTYPE html>
   .pill.live { background:rgba(52,211,153,.12); color:var(--green); }
   .pill.owner { background:rgba(108,143,255,.12); color:var(--accent); }
   .pill.calibrated { background:rgba(96,165,250,.12); color:var(--blue); }
+  .pill.advisor { background:rgba(96,165,250,.12); color:var(--blue); }
 
   input, select, textarea { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
     padding:9px 11px; color:var(--text); font-size:13px; width:100%; font-family:inherit; }
@@ -245,7 +246,7 @@ var uiHTML = []byte(`<!DOCTYPE html>
 
       <div class="form-section">HPA coexistence</div>
       <div class="grid2">
-        <div class="field"><label>Mode</label><select id="ob_mode" onchange="obModeChanged()"><option value="owner">owner — sole controller</option><option value="calibrated">calibrated — nested in HPA</option></select></div>
+        <div class="field"><label>Mode</label><select id="ob_mode" onchange="obModeChanged()"><option value="owner">owner — sole controller</option><option value="calibrated">calibrated — nested in HPA</option><option value="advisor">advisor — HPA/KEDA scales on our metric</option></select></div>
         <div class="field" id="ob_hpaname_field" style="display:none"><label>HPA name</label><input id="ob_hpaname" placeholder="e.g. payment-service-hpa"></div>
       </div>
 

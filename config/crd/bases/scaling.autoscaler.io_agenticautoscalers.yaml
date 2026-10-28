@@ -27,6 +27,13 @@ spec:
     - jsonPath: .status.currentReplicas
       name: Current
       type: integer
+    - jsonPath: .status.recommendedReplicas
+      name: Recommended
+      priority: 1
+      type: integer
+    - jsonPath: .spec.hpaCoexistence.mode
+      name: Mode
+      type: string
     - jsonPath: .spec.dryRun
       name: DryRun
       type: boolean
@@ -132,11 +139,20 @@ spec:
                     type: string
                   mode:
                     description: |-
-                      Mode is either "owner" (agentic autoscaler is sole controller) or
-                      "calibrated" (operates inside the HPA's replica envelope as a safety net).
+                      Mode is one of:
+                        - "owner": the agentic autoscaler is the sole controller and patches
+                          spec.replicas directly.
+                        - "calibrated": it patches spec.replicas, clamped inside a live HPA's
+                          min/max envelope.
+                        - "advisor": it never writes spec.replicas. It publishes its
+                          recommendation as the agentic_autoscaler_recommended_replicas metric,
+                          and an existing HPA (via an external metric) or KEDA ScaledObject scales
+                          on it. The HPA takes the max across its metrics, so CPU scaling keeps
+                          working and the two controllers can never fight.
                     enum:
                     - owner
                     - calibrated
+                    - advisor
                     type: string
                 required:
                 - mode
@@ -233,7 +249,10 @@ spec:
                     - url
                     type: object
                   type:
-                    description: Type is the log source type; must be "loki" or "kafka".
+                    description: |-
+                      Type is the log source type; must be "loki" or "kafka".
+                      "kafka" is reserved for a roadmap collector: it is accepted today but no
+                      logs are read, so the operator decides on metrics alone.
                     enum:
                     - loki
                     - kafka
@@ -331,7 +350,7 @@ spec:
               hpaCoexistenceStatus:
                 description: |-
                   HPACoexistenceStatus reflects the current HPA coexistence mode:
-                  "owner", "calibrated", or "conflict-detected".
+                  "owner", "calibrated", "advisor", or "conflict-detected".
                 type: string
               lastCleanSince:
                 description: |-
@@ -365,6 +384,14 @@ spec:
                 description: ObservedGeneration is the .metadata.generation this status
                   was produced from.
                 format: int64
+                type: integer
+              recommendedReplicas:
+                description: |-
+                  RecommendedReplicas is the replica count published to the
+                  agentic_autoscaler_recommended_replicas metric in advisor mode. It holds
+                  its value across hold decisions and operator restarts. Zero outside
+                  advisor mode.
+                format: int32
                 type: integer
             type: object
         type: object

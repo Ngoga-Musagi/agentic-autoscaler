@@ -69,6 +69,8 @@ console:
 
 hpa:
   # -- Default HPA coexistence mode for new AgenticAutoscaler CRs.
+  # "advisor"    = publish a recommendation metric; your HPA/KEDA scales on it
+  #                (use when an HPA or ScaledObject already scales the Deployment).
   # "calibrated" = nested within HPA bounds (safe default for new rollouts).
   # "owner"      = agentic autoscaler is sole controller (disable HPA first).
   coexistenceMode: "calibrated"

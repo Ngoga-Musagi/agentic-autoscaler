@@ -1,0 +1,56 @@
+# Advisor mode with a plain HPA + prometheus-adapter (no KEDA).
+#
+# Add your existing CPU metric and the agent's recommendation to the same HPA.
+# The HPA scales to the MAX of the per-metric results, so the agent can raise
+# the replica floor on latency/log incidents but never fights CPU scaling.
+#
+# 1. Expose the operator metric through prometheus-adapter as an external
+#    metric (values.yaml of the prometheus-adapter chart):
+#
+#    rules:
+#      external:
+#        - seriesQuery: 'agentic_autoscaler_recommended_replicas'
+#          resources:
+#            overrides:
+#              deployment_namespace: { resource: "namespace" }
+#          name:
+#            as: "agentic_recommended_replicas"
+#          metricsQuery: 'max(<<.Series>>{<<.LabelMatchers>>}) by (deployment)'
+#
+# 2. Point the AgenticAutoscaler at the Deployment in advisor mode:
+#
+#    spec:
+#      hpaCoexistence:
+#        mode: advisor
+#
+# 3. Apply this HPA (edit names). averageValue "1" makes the HPA's desired
+#    count for this metric equal the recommendation.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: payment-service
+  namespace: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: payment-service
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: External
+      external:
+        metric:
+          name: agentic_recommended_replicas
+          selector:
+            matchLabels:
+              deployment: payment-service
+        target:
+          type: AverageValue
+          averageValue: "1"

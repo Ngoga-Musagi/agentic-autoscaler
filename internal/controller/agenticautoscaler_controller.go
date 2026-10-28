@@ -44,6 +44,10 @@ import (
 
 const minRequeueInterval = 30 * time.Second
 
+// modeAdvisor is the hpaCoexistence mode in which the operator publishes a
+// recommendation metric instead of writing spec.replicas.
+const modeAdvisor = "advisor"
+
 // AgenticAutoscalerReconciler reconciles a AgenticAutoscaler object.
 type AgenticAutoscalerReconciler struct {
 	client.Client
@@ -100,6 +104,10 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// 1. Fetch the AgenticAutoscaler CR — return nil if deleted.
 	var aa scalingv1alpha1.AgenticAutoscaler
 	if err := r.Get(ctx, req.NamespacedName, &aa); err != nil {
+		if apierrors.IsNotFound(err) {
+			// A deleted advisor must stop steering the HPA that consumes its metric.
+			observability.ClearRecommendedReplicas(req.Namespace, req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -203,35 +211,26 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, fmt.Errorf("policy enforce: %w", err)
 	}
 	// A non-hold action converted to hold by Enforce means the cooldown was active.
-	if prePolicyAction != "hold" && decision.Action == "hold" {
+	if prePolicyAction != reasoning.ActionHold && decision.Action == reasoning.ActionHold {
 		observability.RecordCooldownSkip(aa.Spec.TargetDeployment)
 	}
 	observability.RecordDecision(decision.Action, aa.Spec.TargetDeployment, decision.Provider,
 		time.Since(reconcileStart).Seconds())
 
-	// 6. Execute the scale action — skip when dry-run or the decision is hold.
-	didScale := false
-	if aa.Spec.DryRun {
-		logger.Info("dry-run: would apply scale decision",
-			"action", decision.Action,
-			"targetReplicas", decision.TargetReplicas,
-			"reason", decision.Reason)
-	} else if decision.Action != "hold" {
-		if err := r.Scaler.Execute(ctx, aa.Spec, decision); err != nil {
-			return ctrl.Result{}, fmt.Errorf("scaler execute: %w", err)
-		}
-		didScale = true
+	// 6. Act on the decision — patch, publish, or (dry-run) only log.
+	advisor := aa.Spec.HPACoexistence.Mode == modeAdvisor
+	out, err := r.act(ctx, &aa, deployNS, decision)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
+	didScale, advised, recommended := out.didScale, out.advised, out.recommended
 
 	// 7. Update status using a merge patch so only changed fields are written.
 	statusPatch := client.MergeFrom(aa.DeepCopy())
-	reason := decision.Reason
-	if aa.Spec.DryRun && decision.Action != "hold" {
-		reason = "[dry-run] " + reason
-	}
-	aa.Status.LastDecisionReason = reason
+	aa.Status.LastDecisionReason = statusReason(aa.Spec.DryRun, out, decision)
 	aa.Status.ObservedGeneration = aa.Generation
 	aa.Status.HPACoexistenceStatus = hpaCoexistenceStatus(aa.Spec)
+	aa.Status.RecommendedReplicas = recommended
 
 	// Advance the sustained-quiet timer for the next reconcile: clear it while any
 	// pattern is active, and start it on the first pattern-free reconcile. This
@@ -254,6 +253,12 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	} else {
 		aa.Status.CurrentReplicas = currentReplicas
 	}
+	// A changed recommendation starts the cooldown exactly like a live scale, so
+	// the advisor cannot flap the consuming HPA faster than owner mode could.
+	if advised {
+		now := metav1.Now()
+		aa.Status.LastScaleTime = &now
+	}
 	if err := r.Status().Patch(ctx, &aa, statusPatch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("status patch: %w", err)
 	}
@@ -269,7 +274,10 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Push a Grafana annotation only for real, non-hold scale actions so the
 	// on-call dashboard shows a vertical marker exactly when scaling happened.
-	if r.Grafana != nil && decision.Action != "hold" && !aa.Spec.DryRun {
+	// In advisor mode only a changed recommendation is an event: while the
+	// consuming HPA waits out its own stabilization window the agent keeps
+	// repeating the same scale-down, which would otherwise annotate every cycle.
+	if r.Grafana != nil && decision.Action != reasoning.ActionHold && !aa.Spec.DryRun && (!advisor || advised) {
 		rec := observability.NewDecisionRecord(aa, decision)
 		if err := r.Grafana.PushAnnotation(ctx, rec); err != nil {
 			// PushAnnotation already swallows all network/HTTP errors and returns
@@ -290,11 +298,89 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 // hpaCoexistenceStatus derives the HPACoexistenceStatus field value from the spec.
 func hpaCoexistenceStatus(spec scalingv1alpha1.AgenticAutoscalerSpec) string {
 	switch spec.HPACoexistence.Mode {
-	case "owner", "calibrated":
+	case "owner", "calibrated", modeAdvisor:
 		return spec.HPACoexistence.Mode
 	default:
 		return ""
 	}
+}
+
+// actOutcome reports what act did, for the status update and annotations.
+type actOutcome struct {
+	// didScale is true when the Deployment's spec.replicas was patched.
+	didScale bool
+	// advised is true when a live advisor changed its published recommendation.
+	advised bool
+	// recommended is the advisor-mode recommendation; zero in other modes.
+	recommended int32
+}
+
+// act applies a policy-enforced decision. Advisor mode never writes
+// spec.replicas: it publishes the recommendation for an HPA or KEDA
+// ScaledObject to consume. The other modes patch the Deployment unless
+// dry-run or hold. Every path that is not a live advisor clears the metric so
+// a stale recommendation can never keep steering an HPA.
+func (r *AgenticAutoscalerReconciler) act(
+	ctx context.Context, aa *scalingv1alpha1.AgenticAutoscaler, deployNS string, decision reasoning.ScaleDecision,
+) (actOutcome, error) {
+	var out actOutcome
+	advisor := aa.Spec.HPACoexistence.Mode == modeAdvisor
+	if advisor {
+		out.recommended = advisorRecommendation(aa.Status.RecommendedReplicas, aa.Spec, decision)
+	}
+	out.advised = advisor && !aa.Spec.DryRun && decision.Action != reasoning.ActionHold &&
+		out.recommended != aa.Status.RecommendedReplicas
+
+	switch {
+	case aa.Spec.DryRun:
+		observability.ClearRecommendedReplicas(aa.Namespace, aa.Name)
+		ctrllog.FromContext(ctx).Info("dry-run: would apply scale decision",
+			"action", decision.Action,
+			"targetReplicas", decision.TargetReplicas,
+			"reason", decision.Reason)
+	case advisor:
+		observability.SetRecommendedReplicas(aa.Namespace, aa.Name, deployNS, aa.Spec.TargetDeployment, out.recommended)
+	default:
+		observability.ClearRecommendedReplicas(aa.Namespace, aa.Name)
+		if decision.Action != reasoning.ActionHold {
+			if err := r.Scaler.Execute(ctx, aa.Spec, decision); err != nil {
+				return out, fmt.Errorf("scaler execute: %w", err)
+			}
+			out.didScale = true
+		}
+	}
+	return out, nil
+}
+
+// statusReason prefixes the decision reason so the CR status says whether the
+// action was only simulated (dry-run) or published as an advisor recommendation.
+func statusReason(dryRun bool, out actOutcome, decision reasoning.ScaleDecision) string {
+	switch {
+	case dryRun && decision.Action != reasoning.ActionHold:
+		return "[dry-run] " + decision.Reason
+	case out.advised:
+		return fmt.Sprintf("[advisor] recommend %d replicas: %s", out.recommended, decision.Reason)
+	default:
+		return decision.Reason
+	}
+}
+
+// advisorRecommendation returns the replica count advisor mode publishes. A
+// hold keeps the previous recommendation so the consuming HPA sees a stable
+// value; the first reconcile starts at minReplicas, which leaves the HPA's own
+// metrics in charge until the agent asks for more.
+func advisorRecommendation(prev int32, spec scalingv1alpha1.AgenticAutoscalerSpec, d reasoning.ScaleDecision) int32 {
+	rec := prev
+	if d.Action != reasoning.ActionHold {
+		rec = d.TargetReplicas
+	}
+	if rec < spec.MinReplicas {
+		rec = spec.MinReplicas
+	}
+	if rec > spec.MaxReplicas {
+		rec = spec.MaxReplicas
+	}
+	return rec
 }
 
 // k8sHPAReader adapts the controller-runtime client to the policy.HPAReader

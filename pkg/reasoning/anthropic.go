@@ -17,11 +17,9 @@ limitations under the License.
 package reasoning
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"time"
@@ -98,63 +96,15 @@ func (a *AnthropicAgent) buildRequestBody(signal fusion.FusedSignal) ([]byte, er
 	return json.Marshal(req)
 }
 
-// callWithRetry POSTs to the Anthropic API, retrying on 429 or 5xx up to
-// anthropicMaxRetries times with a fixed backoff. Returns the raw response body
-// on the first success. Context cancellation stops retries immediately.
+// callWithRetry POSTs to the Anthropic API with the shared cloud retry policy
+// (2 retries, 500ms backoff on 429/5xx).
 func (a *AnthropicAgent) callWithRetry(ctx context.Context, body []byte) ([]byte, error) {
-	var lastErr error
-	for attempt := 0; attempt <= anthropicMaxRetries; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return nil, fmt.Errorf("context cancelled during retry backoff: %w", ctx.Err())
-			case <-time.After(anthropicRetryBackoff):
-			}
-		}
-
-		respBody, status, err := a.doRequest(ctx, body)
-		if err != nil {
-			lastErr = fmt.Errorf("attempt %d: %w", attempt+1, err)
-			continue // network/context error — retry
-		}
-		if status == http.StatusOK {
-			return respBody, nil
-		}
-		if status == http.StatusTooManyRequests || status >= 500 {
-			lastErr = fmt.Errorf("attempt %d: http %d", attempt+1, status)
-			continue // retryable server error
-		}
-		// Non-retryable client error (4xx other than 429).
-		return nil, fmt.Errorf("non-retryable http %d: %s", status, respBody)
+	headers := map[string]string{
+		"x-api-key":         a.cfg.APIKey, // secret — never appears in logs
+		"anthropic-version": anthropicAPIVersion,
 	}
-	return nil, fmt.Errorf("all %d attempts failed: %w", anthropicMaxRetries+1, lastErr)
-}
-
-// doRequest performs a single POST and returns (body, statusCode, error).
-// The request body is re-created from body bytes on every call so retries
-// are safe even after the first attempt has consumed the reader.
-func (a *AnthropicAgent) doRequest(ctx context.Context, body []byte) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, a.messagesEndpoint(), bytes.NewReader(body),
-	)
-	if err != nil {
-		return nil, 0, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", a.cfg.APIKey) // secret — never appears in logs
-	req.Header.Set("anthropic-version", anthropicAPIVersion)
-
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return nil, 0, fmt.Errorf("http do: %w", err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("read response body: %w", err)
-	}
-	return respBody, resp.StatusCode, nil
+	return cloudPostWithRetry(ctx, a.client, a.messagesEndpoint(), headers, body,
+		anthropicMaxRetries, anthropicRetryBackoff)
 }
 
 // parseDecision extracts the AI's JSON from the Anthropic response envelope,
@@ -199,11 +149,11 @@ func (a *AnthropicAgent) parseDecision(raw []byte) (ScaleDecision, error) {
 // replica counts, or confidence values outside [0, 1].
 func (a *AnthropicAgent) validateDecision(d aiDecision) error {
 	switch d.Action {
-	case "scale-up", "scale-down", "hold":
+	case "scale-up", "scale-down", ActionHold:
 	default:
 		return fmt.Errorf("unknown action %q", d.Action)
 	}
-	if d.Action != "hold" {
+	if d.Action != ActionHold {
 		if d.TargetReplicas < a.cfg.MinReplicas || d.TargetReplicas > a.cfg.MaxReplicas {
 			return fmt.Errorf("targetReplicas %d out of bounds [%d, %d]",
 				d.TargetReplicas, a.cfg.MinReplicas, a.cfg.MaxReplicas)

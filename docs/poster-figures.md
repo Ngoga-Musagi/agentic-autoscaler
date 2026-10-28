@@ -67,7 +67,7 @@ The full pipeline and the safety/observability side-channels. Rendered in
 
 ```mermaid
 flowchart LR
-    S["Prometheus + Loki/Kafka"] --> SG["pkg/signals<br/>SystemSnapshot"]
+    S["Prometheus + Loki"] --> SG["pkg/signals<br/>SystemSnapshot"]
     SG --> F["pkg/fusion<br/>FusedSignal"]
     F --> RE["pkg/reasoning<br/>Agent → ScaleDecision"]
     RE --> PO["pkg/policy<br/>bounds · cooldown · HPA-nested"]

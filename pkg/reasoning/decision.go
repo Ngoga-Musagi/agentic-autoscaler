@@ -18,12 +18,15 @@ package reasoning
 
 import "fmt"
 
+// ActionHold is the ScaleDecision.Action that leaves replicas unchanged.
+const ActionHold = "hold"
+
 // HoldDecision returns a ScaleDecision that instructs the scaler to take no
 // action this cycle. TargetReplicas is set to zero; the policy enforcer and
 // scaler ignore it when Action is "hold".
 func HoldDecision(reason string) ScaleDecision {
 	return ScaleDecision{
-		Action:    "hold",
+		Action:    ActionHold,
 		Reason:    reason,
 		Timestamp: nowMetav1(),
 	}
