@@ -207,6 +207,12 @@ loadgen-deploy: ## Deploy the load generator (DEMO ONLY) into the loadgen namesp
 	kubectl -n loadgen rollout status deploy/loadgen --timeout=60s
 	@echo "✓ loadgen ready at http://loadgen.loadgen.svc.cluster.local:8080"
 
+.PHONY: demo
+demo: ## One command: dev stack + the three-service demo (checkout, payment-service, agent-runner).
+	WITH_LOADGEN=1 bash hack/bootstrap.sh
+	bash hack/demo.sh multi-setup
+	@echo "Scenarios: bash hack/demo.sh checkout-storm-up | errors-up | agent-backlog-up | agent-429-up; reset: reset-all"
+
 .PHONY: demo-load
 demo-load: loadgen-image loadgen-deploy ## Deploy loadgen and enable the console Load tab + write mode.
 	$(HELM) upgrade agentic-autoscaler deploy/helm/ --namespace $(DEV_NS) --reuse-values \

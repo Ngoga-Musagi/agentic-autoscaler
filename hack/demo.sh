@@ -13,6 +13,17 @@
 #   bash hack/demo.sh advisor-on   # KEDA scales faultgen on CPU + the agent's metric
 #   bash hack/demo.sh advisor-off  # back to owner mode (the operator patches replicas)
 #
+# Multi-service demo — three services, one operator, one dashboard (docs/demo.md):
+#   bash hack/demo.sh multi-setup      # + checkout (own metric names) and agent-runner
+#   bash hack/demo.sh checkout-storm-up | checkout-storm-down
+#   bash hack/demo.sh errors-up        | errors-down      # payment-service: errors
+#   bash hack/demo.sh agent-backlog-up                    # task surge, LLM healthy → scale
+#   bash hack/demo.sh agent-429-up                        # provider quota squeezed → hold
+#   bash hack/demo.sh agent-budget-up                     # token budget nearly spent → cost guardrail
+#   bash hack/demo.sh agent-down                          # clear agent faults + load
+#   bash hack/demo.sh multi-watch                         # all three, every 10 s
+#   bash hack/demo.sh reset-all                           # everything back to baseline
+#
 # Knobs: RPS (default 100), DURATION seconds (600), QUIET scale-down window in
 # minutes (2), MAX_REPLICAS (10).
 set -euo pipefail
@@ -142,6 +153,135 @@ advisor_off() {
     ok "Owner mode restored: the operator patches faultgen replicas directly."
 }
 
+# ── Multi-service demo ────────────────────────────────────────────────────────
+# loadgen drives one target at a time (a new start replaces the previous run),
+# so the scenarios run one after another while all three stay on the dashboard.
+
+start_load() {  # start_load <url> <rps> [errorPct]
+    loadctl -X POST http://loadgen.loadgen:8080/start -H 'Content-Type: application/json' \
+        -d "{\"targetURL\":\"$1\",\"rps\":$2,\"durationSec\":${DURATION},\"errorPct\":${3:-0},\"delayMs\":0}"
+}
+
+mock_llm() {  # mock_llm <json> — reconfigure the shared mock LLM provider
+    loadctl -X POST http://mock-llm.agents:8080/fault -H 'Content-Type: application/json' -d "$1"
+}
+
+multi_setup() {
+    kubectl get crd agenticautoscalers.scaling.autoscaler.io >/dev/null 2>&1 \
+        || die "Operator not installed — run: bash hack/bootstrap.sh"
+    echo "  → Building demo images and loading them into kind..."
+    docker build -q -f Dockerfile.faultgen -t agentic-autoscaler-faultgen:dev .
+    docker build -q -f Dockerfile.loadgen -t agentic-autoscaler-loadgen:dev .
+    docker build -q -f Dockerfile.agentrunner -t agentic-autoscaler-agentrunner:dev .
+    kind load docker-image agentic-autoscaler-faultgen:dev agentic-autoscaler-loadgen:dev \
+        agentic-autoscaler-agentrunner:dev --name "$KIND_CLUSTER"
+
+    kubectl apply -f deploy/loadgen/loadgen.yaml
+    kubectl apply -f deploy/checkout/checkout.yaml
+    kubectl apply -f deploy/agent-runner/agent-runner.yaml
+    kubectl -n shop rollout status deploy/checkout --timeout=120s
+    kubectl -n agents rollout status deploy/mock-llm --timeout=120s
+    kubectl -n agents rollout status deploy/agent-runner --timeout=120s
+    kubectl -n loadgen rollout status deploy/loadgen --timeout=120s
+    kubectl apply -f config/samples/dev-checkout-autoscaler.yaml
+    kubectl apply -f config/samples/dev-agent-runner-autoscaler.yaml
+
+    kubectl create configmap agentic-autoscaler-multi-dashboard -n monitoring \
+        --from-file=agentic-autoscaler-multi-service.json=deploy/grafana/multi-service-dashboard.json \
+        --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    kubectl label configmap agentic-autoscaler-multi-dashboard -n monitoring grafana_dashboard=1 --overwrite >/dev/null
+    ok "checkout (shop), agent-runner + mock-llm (agents) and their autoscalers are LIVE"
+    echo "  Dashboard: Grafana → 'Agentic Autoscaler — Multi-service demo'"
+    echo "  Next: bash hack/demo.sh multi-watch   (second terminal), then a scenario"
+}
+
+checkout_storm() {
+    if [ "$1" = up ]; then
+        kubectl -n shop set env deploy/checkout FAULT_ENABLED=true >/dev/null
+        kubectl -n shop rollout status deploy/checkout --timeout=120s >/dev/null
+        start_load http://checkout.shop:8080 60
+        ok "checkout: >2 s latency + pool-exhausted logs. Its metrics are shop_* — read via spec.metrics."
+    else
+        kubectl -n shop set env deploy/checkout FAULT_ENABLED=false >/dev/null
+        loadctl -X POST http://loadgen.loadgen:8080/stop
+        ok "checkout storm cleared"
+    fi
+}
+
+payment_errors() {
+    if [ "$1" = up ]; then
+        start_load http://payment-service.production:9898 30 25
+        ok "payment-service: 25% errors at low load. With an LLM provider it holds (the errors"
+        echo "    are not load-related); on the rule engine alone rule 3 scales on >10% errors."
+    else
+        loadctl -X POST http://loadgen.loadgen:8080/stop
+        ok "payment-service errors stopped"
+    fi
+}
+
+agent_backlog() {
+    mock_llm '{"rpm":6000}' >/dev/null
+    start_load http://agent-runner.agents:8080 40
+    ok "agent-runner: 40 tasks/s against 2 runners (16/s capacity). CPU stays flat, the queue"
+    echo "    grows, the backlog rule scales the runners."
+}
+
+agent_429() {
+    mock_llm '{"rpm":240}' >/dev/null
+    start_load http://agent-runner.agents:8080 12
+    ok "agent-runner: the shared LLM quota is squeezed to 4 calls/s. Tasks fail and queue, but"
+    echo "    the operator HOLDS — more runners would only add calls against the same quota."
+}
+
+agent_budget() {
+    # ~23 tasks/s × 800 tokens ≈ 1.1M tokens/min against a 1M budget → ~110% used.
+    mock_llm '{"rpm":6000,"tokenBudgetPerMin":1000000}' >/dev/null
+    start_load http://agent-runner.agents:8080 40
+    ok "agent-runner: the token budget is ~spent. The queue still grows, but the cost guardrail"
+    echo "    holds every scale-up and says what it would have done."
+}
+
+agent_down() {
+    loadctl -X POST http://loadgen.loadgen:8080/stop
+    mock_llm '{"rpm":6000,"tokenBudgetPerMin":4000000}' >/dev/null
+    ok "agent faults cleared, load stopped"
+}
+
+svc_status() {  # svc_status <ns> <deploy> <autoscaler>
+    local ready reason guard
+    ready=$(kubectl -n "$1" get deploy "$2" -o jsonpath='{.status.readyReplicas}/{.spec.replicas}' 2>/dev/null)
+    reason=$(kubectl -n "$1" get agenticautoscaler "$3" -o jsonpath='{.status.lastDecisionReason}' 2>/dev/null)
+    guard=$(kubectl -n "$1" get agenticautoscaler "$3" -o jsonpath='{.status.lastGuardrail}' 2>/dev/null)
+    printf "  %-16s ${CYAN}%-6s${NC} %s%s\n" "$2" "${ready:-?}" "${guard:+[$guard] }" "${reason:0:120}"
+}
+
+multi_status() {
+    echo "$(date +%H:%M:%S)"
+    svc_status shop checkout checkout-autoscaler
+    svc_status production payment-service payment-service-autoscaler
+    svc_status agents agent-runner agent-runner-autoscaler
+}
+
+reset_all() {
+    loadctl -X POST http://loadgen.loadgen:8080/stop || true
+    kubectl -n shop set env deploy/checkout FAULT_ENABLED=false >/dev/null 2>&1 || true
+    mock_llm '{"rpm":6000,"tokenBudgetPerMin":4000000}' >/dev/null 2>&1 || true
+    echo "  → Waiting for checkout and agent-runner to settle at ≤ min+1 (up to 10 min)..."
+    local started now c a
+    started=$(date +%s)
+    while :; do
+        now=$(date +%s)
+        c=$(kubectl -n shop get deploy checkout -o jsonpath='{.spec.replicas}')
+        a=$(kubectl -n agents get deploy agent-runner -o jsonpath='{.spec.replicas}')
+        if [ $((now - started)) -ge 180 ] && [ "$c" -le 3 ] && [ "$a" -le 3 ]; then break; fi
+        [ $((now - started)) -ge 600 ] && die "did not settle — check: bash hack/demo.sh multi-watch"
+        multi_status
+        sleep 20
+    done
+    multi_status
+    ok "All services at baseline — ready for the next scenario"
+}
+
 case "${1:-}" in
     setup)      setup ;;
     advisor-on)  advisor_on ;;
@@ -151,5 +291,16 @@ case "${1:-}" in
     storm-down) storm_down ;;
     status)     status ;;
     watch)      while :; do status; sleep 10; done ;;
-    *)          sed -n '2,18p' "$0"; exit 1 ;;
+    multi-setup)         multi_setup ;;
+    checkout-storm-up)   checkout_storm up ;;
+    checkout-storm-down) checkout_storm down ;;
+    errors-up)           payment_errors up ;;
+    errors-down)         payment_errors down ;;
+    agent-backlog-up)    agent_backlog ;;
+    agent-429-up)        agent_429 ;;
+    agent-budget-up)     agent_budget ;;
+    agent-down)          agent_down ;;
+    multi-watch)         while :; do multi_status; sleep 10; done ;;
+    reset-all)           reset_all ;;
+    *)          sed -n '2,30p' "$0"; exit 1 ;;
 esac

@@ -1,0 +1,319 @@
+{
+  "title": "Agentic Autoscaler — Multi-service demo",
+  "uid": "agentic-autoscaler-multi",
+  "tags": [
+    "agentic-autoscaler",
+    "autoscaling",
+    "demo"
+  ],
+  "description": "checkout, payment-service and agent-runner side by side: replicas, latency, CPU, agent backpressure and every decision.",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "hide": 0
+      },
+      {
+        "name": "DS_LOKI",
+        "label": "Loki",
+        "type": "datasource",
+        "query": "loki",
+        "hide": 0
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Operator decisions",
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "iconColor": "#6c8fff",
+        "target": {
+          "type": "tags",
+          "tags": [
+            "agentic-autoscaler"
+          ],
+          "matchAny": true,
+          "limit": 200
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "How to read this",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Three services, one operator.** `checkout` has its own metric names (read via `spec.metrics`); `payment-service` is a standard HTTP API; `agent-runner` is an AI-agent worker pool. Vertical markers are the operator's decisions. Watch **CPU stay flat** while replicas move — and the agent runners **hold** during a provider rate limit (guardrail panel)."
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Replicas",
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "max(kube_deployment_spec_replicas{namespace=\"shop\",deployment=\"checkout\"})",
+          "legendFormat": "checkout"
+        },
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "max(kube_deployment_spec_replicas{namespace=\"production\",deployment=\"payment-service\"})",
+          "legendFormat": "payment-service"
+        },
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "max(kube_deployment_spec_replicas{namespace=\"agents\",deployment=\"agent-runner\"})",
+          "legendFormat": "agent-runner"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "p99 latency (ms) — each service's own metric",
+      "gridPos": {
+        "x": 12,
+        "y": 3,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "(histogram_quantile(0.99, sum by (le) (rate(shop_request_seconds_bucket{app=\"checkout\"}[2m])))) * 1000",
+          "legendFormat": "checkout"
+        },
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "(histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{service=\"payment-service\"}[2m])))) * 1000",
+          "legendFormat": "payment-service"
+        },
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "(histogram_quantile(0.99, sum by (le) (rate(agent_task_seconds_bucket{app=\"agent-runner\"}[2m])))) * 1000",
+          "legendFormat": "agent-runner (task)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 2
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "CPU (% of one core, average per pod) — what a CPU HPA sees",
+      "gridPos": {
+        "x": 0,
+        "y": 11,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "avg(rate(container_cpu_usage_seconds_total{namespace=\"shop\",pod=~\"checkout-.*\",container!=\"\",container!=\"POD\"}[2m])) * 100",
+          "legendFormat": "checkout"
+        },
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "avg(rate(container_cpu_usage_seconds_total{namespace=\"production\",pod=~\"payment-service-.*\",container!=\"\",container!=\"POD\"}[2m])) * 100",
+          "legendFormat": "payment-service"
+        },
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "avg(rate(container_cpu_usage_seconds_total{namespace=\"agents\",pod=~\"agent-runner-.*\",container!=\"\",container!=\"POD\"}[2m])) * 100",
+          "legendFormat": "agent-runner"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "lineWidth": 2
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Error rate (%)",
+      "gridPos": {
+        "x": 12,
+        "y": 11,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "100 * (sum(rate(shop_requests_total{app=\"checkout\",code=~\"5..\"}[2m])) or vector(0)) / (sum(rate(shop_requests_total{app=\"checkout\"}[2m])) > 0)",
+          "legendFormat": "checkout"
+        },
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "100 * (sum(rate(http_requests_total{service=\"payment-service\",status=~\"5..\"}[2m])) or vector(0)) / (sum(rate(http_requests_total{service=\"payment-service\"}[2m])) > 0)",
+          "legendFormat": "payment-service"
+        },
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "100 * sum(rate(agent_tasks_total{app=\"agent-runner\",result!=\"ok\"}[2m])) / (sum(rate(agent_tasks_total{app=\"agent-runner\"}[2m])) > 0)",
+          "legendFormat": "agent-runner (failed tasks)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "lineWidth": 2
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "agent-runner: queued tasks and LLM provider rate limiting",
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "sum(agent_tasks_queued{app=\"agent-runner\"})",
+          "legendFormat": "queued tasks"
+        },
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "100 * sum(rate(agent_llm_calls_total{app=\"agent-runner\",outcome=\"rate_limited\"}[2m])) / (sum(rate(agent_llm_calls_total{app=\"agent-runner\"}[2m])) > 0)",
+          "legendFormat": "LLM 429 %"
+        },
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "max(mockllm_token_budget_used_percent)",
+          "legendFormat": "token budget used %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Decisions and guardrails (per 5 min)",
+      "gridPos": {
+        "x": 12,
+        "y": 18,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "sum by (deployment, action) (increase(agentic_autoscaler_decisions_total{deployment=~\"checkout|payment-service|agent-runner\",action!=\"hold\"}[5m]))",
+          "legendFormat": "{{deployment}} {{action}}"
+        },
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "sum by (deployment, guardrail) (increase(agentic_autoscaler_guardrail_total{deployment=~\"checkout|payment-service|agent-runner\"}[5m]))",
+          "legendFormat": "{{deployment}} held by {{guardrail}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Decision log — why each service changed (or was held)",
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": "${DS_LOKI}",
+      "targets": [
+        {
+          "datasource": "${DS_LOKI}",
+          "queryType": "range",
+          "refId": "A",
+          "expr": "{app=\"agentic-autoscaler\"} |= \"scale_decision\" | regexp `(?P<payload>\\{.*\\})` | line_format \"{{.payload}}\" | json | deployment=~\"checkout|payment-service|agent-runner\" | action!=\"hold\" or guardrail!=\"\" | line_format \"{{.deployment}}\t{{.action}}\t{{.oldReplicas}} → {{.newReplicas}}\t{{.provider}}\t{{.guardrail}}\t{{.reason}}\""
+        }
+      ],
+      "options": {
+        "showHeader": true
+      }
+    }
+  ]
+}

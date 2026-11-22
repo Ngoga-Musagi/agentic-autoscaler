@@ -1,0 +1,40 @@
+{{- if .Values.tenantRoles.create }}
+# Tenant roles: teams receive these per namespace through a RoleBinding, e.g.
+#   kubectl -n shop create rolebinding shop-autoscaling \
+#     --clusterrole={{ include "agentic-autoscaler.fullname" . }}-editor --group=team-shop
+# They grant access to AgenticAutoscaler CRs only — never to the target
+# Deployments, HPAs or Secrets. Pausing (agentic-autoscaler.io/pause) and
+# approving (agentic-autoscaler.io/approved-replicas) are CR annotations, so the
+# editor role is also what lets a team pause or approve its own autoscalers.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "agentic-autoscaler.fullname" . }}-editor
+  labels:
+    {{- include "agentic-autoscaler.labels" . | nindent 4 }}
+    {{- if .Values.tenantRoles.aggregateToDefaultRoles }}
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    {{- end }}
+rules:
+  - apiGroups: ["scaling.autoscaler.io"]
+    resources: ["agenticautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["scaling.autoscaler.io"]
+    resources: ["agenticautoscalers/status"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "agentic-autoscaler.fullname" . }}-viewer
+  labels:
+    {{- include "agentic-autoscaler.labels" . | nindent 4 }}
+    {{- if .Values.tenantRoles.aggregateToDefaultRoles }}
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+    {{- end }}
+rules:
+  - apiGroups: ["scaling.autoscaler.io"]
+    resources: ["agenticautoscalers", "agenticautoscalers/status"]
+    verbs: ["get", "list", "watch"]
+{{- end }}

@@ -79,6 +79,22 @@ hpa:
 # applied. Disable only after reviewing the decision log for 7+ days.
 dryRun: true
 
+# -- Operator-wide kill switch: every AgenticAutoscaler holds (decisions are
+# still made, explained and audited, but nothing scales and advisor
+# recommendations freeze). Per-CR or per-Deployment: annotate with
+# agentic-autoscaler.io/pause: "true". See docs/governance.md.
+pauseAll: false
+
+# -- Tenant roles for multi-team clusters. Creates two ClusterRoles that teams
+# bind per namespace with a RoleBinding (no cluster-wide grant is created):
+#   <release>-editor  create/edit/delete AgenticAutoscalers (and approve/pause)
+#   <release>-viewer  read AgenticAutoscalers and their status
+# aggregateToDefaultRoles also folds them into the built-in admin/edit and view
+# roles, so whoever can edit a namespace can manage its autoscalers.
+tenantRoles:
+  create: true
+  aggregateToDefaultRoles: false
+
 ollama:
   # -- Deploy the bundled Ollama sub-chart for fully on-prem, open-source
   # reasoning (no cloud account). The default model (qwen2.5:3b) runs on a

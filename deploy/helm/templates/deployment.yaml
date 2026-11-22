@@ -89,6 +89,9 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
+            # ---- Governance: operator-wide kill switch ------------------------
+            - name: AGENTIC_AUTOSCALER_PAUSE_ALL
+              value: {{ .Values.pauseAll | quote }}
             # ---- Console (management + load generation) ---------------------
             - name: CONSOLE_WRITE_ENABLED
               value: {{ .Values.console.writeEnabled | quote }}
