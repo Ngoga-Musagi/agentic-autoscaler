@@ -58,10 +58,24 @@ overstated:
 | Kafka log source | Roadmap — the CRD accepts `logSource.type: kafka`, but no collector exists yet, so such a CR runs on metrics only |
 | Detection across *N consecutive log windows* | Implemented · Tested |
 | Custom log patterns via the CR spec | Implemented · Tested |
+| Any-service onboarding: `examples/` catalog (one CR per archetype), CI-validated against the CRD | Implemented · Tested |
+| Non-default metric names via `spec.metrics` (demo `checkout`, `shop_*` metrics) | Implemented · Tested · Observed |
+| Backlog signal + rule (`spec.backlog`; Prometheus source, Kafka-lag/Redis via the same interface later) | Implemented · Tested · Observed |
+| AI-agent workloads (`spec.agentic`): provider rate-limit hold, token-budget cost guardrail, agentic log patterns | Implemented · Tested · Observed |
+| Agent-runner sample workload + shared-quota mock LLM (`cmd/agentrunner`, no paid key) | Implemented · Tested · Observed |
+| Governance (`spec.policy`): max step, confidence floor, approval gate; pause annotation + global kill switch; tenant RBAC roles | Implemented · Tested |
+| Guardrail outcomes in status, audit log, metrics and console | Implemented · Tested |
+| Multi-service demo: one command, one dashboard, reset (`make demo`, `hack/demo.sh multi-*`) | Implemented · Observed (scenarios, reset, dashboard queries) |
 | Sustained-quiet scale-down (rule 5) across reconciles | Implemented · Tested |
 | Log-pattern-driven end-to-end demo (timeout storm) | Implemented · Tested · Observed |
 | Quantitative A/B evidence (scaling lead-time: HPA vs agentic, kind, n=1) | Implemented · Observed |
 | PR CI (build/test/lint/smoke) + multi-arch release workflow | Workflows added — first green run pending a PR/tag |
+
+**Guides:** [onboard any service](docs/onboarding.md) ·
+[example CR per archetype](examples/README.md) ·
+[governance & guardrails](docs/governance.md) ·
+[existing HPA/KEDA (advisor mode)](docs/integrating-existing-infra.md) ·
+[multi-service demo](docs/demo.md)
 
 ## Getting Started
 

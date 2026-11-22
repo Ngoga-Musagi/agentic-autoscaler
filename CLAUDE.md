@@ -26,6 +26,9 @@ Kubernetes-native operator that extends autoscaling beyond CPU/memory by fusing 
 | `pkg/observability/` | Grafana annotations + decision audit log |
 | `pkg/queryapi/` | Web console on :8090 — decision explorer + management API (onboard/edit/delete CRs) + load proxy |
 | `cmd/loadgen/` | Demo HTTP load generator with a control API (testing only, never production) |
+| `cmd/faultgen/` | Timeout-storm demo workload (also runs as `checkout` with non-default metric names) |
+| `cmd/agentrunner/` | AI-agent demo workload + shared-quota mock LLM (testing only, never production) |
+| `examples/` | One CR per service archetype — CI-validated against the CRD |
 | `config/` | Generated CRD, RBAC, manager manifests |
 | `deploy/helm/` | Helm chart for cluster installation |
 | `deploy/loadgen/` | Load generator Deployment + Service (opt-in demo) |

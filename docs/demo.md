@@ -1,0 +1,104 @@
+# Multi-service demo — three services, one operator, one dashboard
+
+DEMO / TESTING ONLY. Shows the same unchanged operator handling three very
+different services, each configured only by its `AgenticAutoscaler` CR:
+
+| Service | Namespace | What it proves | CR |
+|---|---|---|---|
+| `checkout` | `shop` | a service with **its own metric names** (`shop_request_seconds`, `shop_requests_total{app,code}`) is onboarded with `spec.metrics` alone | `config/samples/dev-checkout-autoscaler.yaml` |
+| `payment-service` | `production` | a standard HTTP API next to an existing HPA (calibrated mode); errors that are not load-related | `config/samples/payment-service-autoscaler.yaml` |
+| `agent-runner` | `agents` | AI-agent workers: scale on **backlog**, **hold** when the LLM provider rate-limits, cost guardrail on the token budget | `config/samples/dev-agent-runner-autoscaler.yaml` |
+
+## Bring it up
+
+```bash
+make demo            # = WITH_LOADGEN=1 bash hack/bootstrap.sh && bash hack/demo.sh multi-setup
+# without make (Git Bash on Windows):
+WITH_LOADGEN=1 bash hack/bootstrap.sh
+bash hack/demo.sh multi-setup
+```
+
+Open Grafana → **Agentic Autoscaler — Multi-service demo** (replicas, p99,
+CPU, agent backlog / 429 % / token budget, decisions and guardrails, and the
+decision log), and in a second terminal:
+
+```bash
+bash hack/demo.sh multi-watch
+```
+
+The load generator drives one target at a time, so run the scenarios one after
+another. `bash hack/demo.sh reset-all` returns everything to baseline (about
+3–5 minutes) — run it a few minutes before presenting.
+
+## Scenarios
+
+### 1 · checkout — timeout storm, CPU blind
+```bash
+bash hack/demo.sh checkout-storm-up      # … checkout-storm-down
+```
+checkout answers in > 2 s and logs `connection pool exhausted`, while its CPU
+stays near idle. The operator reads p99 through the CR's `shop_*` query and the
+pattern through Loki, and rule 2 (or the LLM) scales it. A CPU HPA sees nothing.
+
+### 2 · payment-service — restraint
+```bash
+bash hack/demo.sh errors-up              # … errors-down
+```
+25 % errors at low load. With an LLM provider configured the agent **holds**:
+the errors are not load-related, so more pods would not help. Be honest on
+stage about the fallback: on the rule engine alone, rule 3 scales on > 10 %
+errors.
+
+### 3 · agent-runner — backlog: scale
+```bash
+bash hack/demo.sh agent-backlog-up       # … agent-down
+```
+40 tasks/s against 2 runners that carry 16/s. Every task waits on the LLM and a
+tool, so CPU stays flat while the queue grows. The backlog rule asks for
+`ceil(queued / 2)` runners (within min/max) — about half a runner's four
+worker slots queued, beyond which tasks start to wait.
+
+### 4 · agent-runner — provider rate limit: hold
+```bash
+bash hack/demo.sh agent-429-up           # … agent-down
+```
+The mock LLM's quota — shared by every runner, like an API key's — is squeezed
+to 4 calls/s. Tasks fail and queue and the error rate climbs, which would make
+a queue-length or error-rate autoscaler add runners. The operator **holds**,
+with the reason on the dashboard:
+
+> held: the LLM provider is rate-limiting N% of calls (hold at 20%) — its quota
+> is shared by every replica, so more workers would only add calls against it
+
+### 5 · agent-runner — token budget: cost guardrail
+```bash
+bash hack/demo.sh agent-budget-up        # … agent-down
+```
+The same task surge, but the provider's token budget is ~110 % used. The queue
+grows exactly as in scenario 3, and every scale-up is held by the cost
+guardrail, with the scale-up it blocked in the reason.
+
+### Optional · advisor mode with KEDA
+```bash
+bash hack/demo.sh advisor-on             # faultgen scaled by KEDA on max(CPU, agent)
+```
+See [integrating-existing-infra.md](integrating-existing-infra.md#hpa-coexistence).
+
+## What was observed on kind (2026-11-22, rule engine)
+
+One run each, on the dev `kind` cluster, with the reasoning on the rule engine
+(the LLM key was not configured). n=1 — a demonstration, not a benchmark.
+
+| Scenario | Observed |
+|---|---|
+| checkout storm | p99 read from `shop_request_seconds` via the CR; scaled **2 → 3 → 5 → 8 → 10** in ~3.5 min, then logged "scale-up 10 → 10" while pinned at the max (fixed on this branch, see below; unit-tested, not yet re-run live), **10 → 3** after the 2-min quiet window |
+| agent backlog, config only (no `spec.backlog`/`spec.agentic`) | the unchanged rules scaled **2 → 3 → 5** on `worker pool saturated` + task p99 > 2 s, then **5 → 3** |
+| agent 429 storm (quota squeezed to 4 calls/s) | 77–83 % of LLM calls rejected; **held for 6 min** at 3 runners, each decision recording `guardrail: llm-rate-limit` and the scale-up it blocked (to 5) |
+| agent token budget exhausted | **held for 4 min**, `guardrail: token-budget`, reason naming the blocked scale-up (to 4–6) |
+| agent backlog, budget restored | backlog rule scaled **3 → 4 → 6** while runner CPU stayed at **0.4–0.8 %** — a CPU HPA would not have moved |
+| `reset-all` | all three services back to baseline (agent-runner 6 → 3) |
+
+The run also surfaced (and the branch fixes) two existing issues: a service
+pinned at `maxReplicas` logged "scale-up 10 → 10" every cycle (now an explained
+`replica-bounds` hold), and the scale-down reason always said "15+ minutes" even
+with a 2-minute window (now it states the configured window).
