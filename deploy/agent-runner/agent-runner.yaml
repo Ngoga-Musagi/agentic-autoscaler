@@ -1,0 +1,156 @@
+# agent-runner + mock-llm — the AI-agent demo workload. DEMO / TESTING ONLY.
+#
+# agent-runner: agent workers (4 concurrent tasks per pod). Each task calls the
+#   mock LLM, then a tool. Scaled by config/samples/dev-agent-runner-autoscaler.yaml.
+# mock-llm: ONE replica standing in for an LLM provider. Its requests-per-minute
+#   quota and token budget are shared by every runner pod, like an API key's.
+#
+#   Image:   docker build -f Dockerfile.agentrunner -t agentic-autoscaler-agentrunner:dev .
+#            (or: bash hack/demo.sh multi-setup)
+#   Faults:  bash hack/demo.sh agent-backlog-up | agent-429-up | agent-down
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agents
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-llm
+  namespace: agents
+  labels:
+    app: mock-llm
+    app.kubernetes.io/part-of: agentic-autoscaler
+    app.kubernetes.io/component: demo-workload
+spec:
+  replicas: 1                       # one shared quota — never scale this
+  selector:
+    matchLabels:
+      app: mock-llm
+  template:
+    metadata:
+      labels:
+        app: mock-llm
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mock-llm
+          image: agentic-autoscaler-agentrunner:dev
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - { name: ROLE, value: llm }
+            - { name: LLM_RPM, value: "6000" }               # 100 completions/s — ample
+            - { name: LLM_LATENCY_MS, value: "300" }
+            - { name: TOKEN_BUDGET_PER_MIN, value: "4000000" }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits:   { cpu: "1", memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-llm
+  namespace: agents
+  labels:
+    app: mock-llm
+spec:
+  selector:
+    app: mock-llm
+  ports:
+    - { name: http, port: 8080, targetPort: 8080 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-runner
+  namespace: agents
+  labels:
+    app: agent-runner
+    app.kubernetes.io/part-of: agentic-autoscaler
+    app.kubernetes.io/component: demo-workload
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agent-runner
+  template:
+    metadata:
+      labels:
+        app: agent-runner
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent-runner
+          image: agentic-autoscaler-agentrunner:dev
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - { name: ROLE, value: runner }
+            - { name: SERVICE_NAME, value: agent-runner }   # app="agent-runner" = $TARGET
+            - { name: WORKERS, value: "4" }
+            - { name: MAX_QUEUE, value: "200" }
+            - { name: LLM_URL, value: "http://mock-llm.agents:8080" }
+            - { name: TOOL_LATENCY_MS, value: "200" }
+            # Faults, set by hack/demo.sh so new pods inherit them:
+            - { name: TOOL_TIMEOUT_PCT, value: "0" }
+            - { name: CONTEXT_OVERFLOW_PCT, value: "0" }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits:   { cpu: "1", memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-runner
+  namespace: agents
+  labels:
+    app: agent-runner
+spec:
+  selector:
+    app: agent-runner
+  ports:
+    - { name: http, port: 8080, targetPort: 8080 }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: agent-workloads
+  namespace: agents
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchExpressions:
+      - { key: app, operator: In, values: [agent-runner, mock-llm] }
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

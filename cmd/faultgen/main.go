@@ -70,27 +70,40 @@ func serviceName() string {
 	return "faultgen"
 }
 
-// metrics holds the two series the operator's default PromQL reads.
+// metricPrefix selects the metric naming style. Empty (the default) emits the
+// standard http_* names with a `service` label, which the operator's default
+// queries read. A prefix such as "shop" emits shop_request_seconds and
+// shop_requests_total with `app`/`code` labels instead, so a CR must override
+// spec.metrics — the demo's proof that any naming scheme can be onboarded.
+func metricPrefix() string { return os.Getenv("METRIC_PREFIX") }
+
+// metrics holds the two series the operator's PromQL reads.
 type metrics struct {
 	duration prometheus.Histogram
 	requests *prometheus.CounterVec
 }
 
-func newMetrics(reg prometheus.Registerer, service string) *metrics {
+func newMetrics(reg prometheus.Registerer, service, prefix string) *metrics {
+	durationName, requestsName, targetLabel, statusLabel :=
+		"http_request_duration_seconds", "http_requests_total", "service", "status"
+	if prefix != "" {
+		durationName, requestsName, targetLabel, statusLabel =
+			prefix+"_request_seconds", prefix+"_requests_total", "app", "code"
+	}
 	m := &metrics{
 		duration: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name:        "http_request_duration_seconds",
+			Name:        durationName,
 			Help:        "HTTP request latency in seconds.",
-			ConstLabels: prometheus.Labels{"service": service},
+			ConstLabels: prometheus.Labels{targetLabel: service},
 			// Buckets span the 2000 ms rule-2 threshold so p99 resolves above it
 			// during a storm (2.5 s lands between the 2 s and 3 s buckets).
 			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 3, 5, 10},
 		}),
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name:        "http_requests_total",
+			Name:        requestsName,
 			Help:        "HTTP requests by response status.",
-			ConstLabels: prometheus.Labels{"service": service},
-		}, []string{"status"}),
+			ConstLabels: prometheus.Labels{targetLabel: service},
+		}, []string{statusLabel}),
 	}
 	reg.MustRegister(m.duration, m.requests)
 	return m
@@ -133,7 +146,7 @@ func main() {
 	service := serviceName()
 
 	reg := prometheus.NewRegistry()
-	m := newMetrics(reg, service)
+	m := newMetrics(reg, service, metricPrefix())
 
 	// Initial fault state from the environment, so every replica — including
 	// ones the operator scales up during a storm — faults from boot without a

@@ -1,0 +1,24 @@
+# Build the agentrunner binary — DEMO / TESTING ONLY.
+# agentrunner is the AI-agent demo workload (ROLE=runner) and its mock LLM
+# provider (ROLE=llm): I/O-bound agent workers with a shared, rate-limited
+# provider, agentic metrics and log lines. Never for production.
+FROM golang:1.21 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /workspace
+COPY go.mod go.mod
+COPY go.sum go.sum
+RUN go mod download
+
+COPY cmd/agentrunner/ cmd/agentrunner/
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o agentrunner ./cmd/agentrunner
+
+# Distroless, non-root — same security posture as the operator and loadgen images.
+FROM gcr.io/distroless/static:nonroot
+WORKDIR /
+COPY --from=builder /workspace/agentrunner .
+USER 65532:65532
+
+ENTRYPOINT ["/agentrunner"]

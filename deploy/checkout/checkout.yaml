@@ -1,0 +1,106 @@
+# checkout — a second demo service with NON-STANDARD metric names. DEMO ONLY.
+#
+# It runs the faultgen image with METRIC_PREFIX=shop, so it exposes
+# shop_request_seconds / shop_requests_total labelled app/code instead of the
+# http_* / service / status names the operator queries by default. Its CR
+# (config/samples/dev-checkout-autoscaler.yaml) overrides spec.metrics to match:
+# a different service, a different naming scheme, the same unchanged operator.
+#
+#   Image:   make faultgen-image   (or: bash hack/demo.sh multi-setup)
+#   Deploy:  kubectl apply -f deploy/checkout/checkout.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shop
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout
+  namespace: shop
+  labels:
+    app: checkout
+    app.kubernetes.io/part-of: agentic-autoscaler
+    app.kubernetes.io/component: demo-workload
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: checkout
+  template:
+    metadata:
+      labels:
+        app: checkout
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: checkout
+          image: agentic-autoscaler-faultgen:dev
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            # app="checkout" must equal the Deployment name ($TARGET).
+            - name: SERVICE_NAME
+              value: checkout
+            - name: METRIC_PREFIX
+              value: shop
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits:   { cpu: "1", memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: checkout
+  namespace: shop
+  labels:
+    app: checkout
+spec:
+  selector:
+    app: checkout
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+# kube-prometheus-stack discovers scrape targets via ServiceMonitor.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: checkout
+  namespace: shop
+  labels:
+    app: checkout
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: checkout
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
