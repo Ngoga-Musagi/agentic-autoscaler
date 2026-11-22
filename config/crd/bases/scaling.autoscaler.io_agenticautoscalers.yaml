@@ -65,6 +65,39 @@ spec:
           spec:
             description: AgenticAutoscalerSpec defines the desired state of AgenticAutoscaler.
             properties:
+              agentic:
+                description: |-
+                  Agentic adds AI-agent workload signals (LLM rate limiting, token budget)
+                  and enables the agentic built-in log patterns.
+                properties:
+                  llmRateLimitQuery:
+                    description: |-
+                      LLMRateLimitQuery is PromQL returning the percentage (0-100) of LLM calls
+                      the provider rejected with a rate limit (HTTP 429). $TARGET is substituted.
+                    type: string
+                  rateLimitHoldPercent:
+                    description: |-
+                      RateLimitHoldPercent: at or above this 429 rate any scale-up (other than
+                      an OOM emergency) becomes a hold, because a provider quota is shared by
+                      every replica — more workers only add calls against it. Default 20.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  tokenBudgetCapPercent:
+                    description: |-
+                      TokenBudgetCapPercent: at or above this share of the token budget the
+                      cost guardrail blocks scale-ups (other than an OOM emergency). Default 90.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  tokenBudgetQuery:
+                    description: |-
+                      TokenBudgetQuery is PromQL returning the percentage (0-100) of the LLM
+                      token budget already used in its period. $TARGET is substituted.
+                    type: string
+                type: object
               aiProvider:
                 description: AIProvider configures the AI reasoning backend.
                 properties:
@@ -83,6 +116,26 @@ spec:
                     type: string
                 required:
                 - provider
+                type: object
+              backlog:
+                description: Backlog adds a queue-depth signal for queue workers and
+                  agent runners.
+                properties:
+                  query:
+                    description: |-
+                      Query is PromQL returning the number of queued work items for the whole
+                      Deployment (e.g. a queue-depth gauge); $TARGET is replaced with
+                      spec.targetDeployment. A failing query is logged and ignored for that
+                      reconcile, never fatal.
+                    type: string
+                  targetPerReplica:
+                    description: |-
+                      TargetPerReplica is how many queued items one replica should carry. The
+                      backlog rule asks for ceil(backlog / targetPerReplica) replicas, within
+                      min/max, and the quiet-window scale-down waits until the backlog fits.
+                    format: int32
+                    minimum: 1
+                    type: integer
                 type: object
               cooldownSeconds:
                 description: CooldownSeconds is the minimum number of seconds between
@@ -313,6 +366,38 @@ spec:
                 - grafanaURL
                 - secretRef
                 type: object
+              policy:
+                description: |-
+                  Policy adds governance guardrails: a per-decision step cap, a confidence
+                  floor for AI decisions, and an approval gate for large scale-ups.
+                properties:
+                  approvalAboveReplicas:
+                    description: |-
+                      ApprovalAboveReplicas requires a human to approve any scale-up to more
+                      than this many replicas. Until the CR carries the annotation
+                      agentic-autoscaler.io/approved-replicas with a value >= the target, the
+                      decision is held and recorded in status.pendingApproval. 0 (the default)
+                      is off.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  maxScaleStep:
+                    description: |-
+                      MaxScaleStep caps how many replicas a single decision may add or remove.
+                      0 (the default) means no cap beyond minReplicas/maxReplicas.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  minConfidence:
+                    description: |-
+                      MinConfidence is a floor, 0-100, on an AI provider's confidence. A
+                      decision below MinConfidence/100 is discarded and the deterministic rule
+                      engine decides instead; the reason records why. 0 (the default) is off.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                type: object
               prometheusURL:
                 description: PrometheusURL is the base URL of the Prometheus HTTP
                   API.
@@ -366,6 +451,12 @@ spec:
                 description: LastDecisionReason is the human-readable explanation
                   of the last scaling decision.
                 type: string
+              lastGuardrail:
+                description: |-
+                  LastGuardrail names the guardrail that changed the last decision
+                  (e.g. "cooldown", "max-scale-step", "llm-rate-limit", "paused"), or is
+                  empty when the decision went through as reasoned.
+                type: string
               lastScaleTime:
                 description: LastScaleTime is the timestamp of the most recent live
                   scale action.
@@ -385,6 +476,28 @@ spec:
                   was produced from.
                 format: int64
                 type: integer
+              pendingApproval:
+                description: |-
+                  PendingApproval is set while a scale-up waits for
+                  agentic-autoscaler.io/approved-replicas; cleared once applied or no
+                  longer recommended.
+                properties:
+                  reason:
+                    description: Reason is the decision's explanation.
+                    type: string
+                  since:
+                    description: Since is when the recommendation was first held.
+                    format: date-time
+                    type: string
+                  targetReplicas:
+                    description: TargetReplicas is the replica count awaiting approval.
+                    format: int32
+                    type: integer
+                required:
+                - reason
+                - since
+                - targetReplicas
+                type: object
               recommendedReplicas:
                 description: |-
                   RecommendedReplicas is the replica count published to the

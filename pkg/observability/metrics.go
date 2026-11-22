@@ -48,6 +48,11 @@ var (
 		Help: "Total scale actions skipped because the cooldown window was active.",
 	}, []string{"deployment"})
 
+	guardrailsTotal = factory.NewCounterVec(prometheus.CounterOpts{
+		Name: "agentic_autoscaler_guardrail_total",
+		Help: "Decisions changed by a guardrail, labelled by deployment and guardrail.",
+	}, []string{"deployment", "guardrail"})
+
 	// Labels avoid "namespace" because Prometheus rewrites a scraped namespace
 	// label to exported_namespace, which would break copy-pasted HPA/KEDA queries.
 	recommendedReplicas = factory.NewGaugeVec(prometheus.GaugeOpts{
@@ -71,6 +76,11 @@ func RecordAIProviderError(provider string) {
 // RecordCooldownSkip increments cooldown_skips_total for the given deployment.
 func RecordCooldownSkip(deployment string) {
 	cooldownSkipsTotal.WithLabelValues(deployment).Inc()
+}
+
+// RecordGuardrail increments guardrail_total when a guardrail changed a decision.
+func RecordGuardrail(deployment, guardrail string) {
+	guardrailsTotal.WithLabelValues(deployment, guardrail).Inc()
 }
 
 // SetRecommendedReplicas publishes an advisor-mode recommendation for the

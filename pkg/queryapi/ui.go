@@ -94,6 +94,9 @@ var uiHTML = []byte(`<!DOCTYPE html>
   .pill.owner { background:rgba(108,143,255,.12); color:var(--accent); }
   .pill.calibrated { background:rgba(96,165,250,.12); color:var(--blue); }
   .pill.advisor { background:rgba(96,165,250,.12); color:var(--blue); }
+  .pill.guard { background:rgba(251,191,36,.12); color:var(--yellow); }
+  .pill.prov { background:rgba(148,163,184,.12); color:var(--muted); }
+  .card-pills { margin-top:5px; display:flex; gap:5px; flex-wrap:wrap; }
 
   input, select, textarea { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
     padding:9px 11px; color:var(--text); font-size:13px; width:100%; font-family:inherit; }
@@ -358,8 +361,24 @@ var uiHTML = []byte(`<!DOCTYPE html>
       var repStr = d.action === 'hold' ? d.oldReplicas + ' replicas' : d.oldReplicas + ' → ' + d.newReplicas;
       return '<div class="decision-card"><div class="card-top"><span class="card-action '+d.action+'">'+d.action+'</span>'+
         '<span class="card-time">'+timeStr+'</span></div><div class="card-deployment">'+esc(d.deployment)+'</div>'+
-        '<div class="card-time">'+repStr+'</div>'+(d.reason?'<div class="card-reason">'+esc(d.reason)+'</div>':'')+'</div>';
+        '<div class="card-time">'+repStr+'</div>'+(d.reason?'<div class="card-reason">'+esc(d.reason)+'</div>':'')+
+        cardPills(d)+'</div>';
     }).join('');
+  }
+  function statusPills(a) {
+    var p = '';
+    if (a.pendingApprovalReplicas) p += '<span class="pill guard">awaiting approval: '+a.pendingApprovalReplicas+'</span> ';
+    else if (a.lastGuardrail) p += '<span class="pill guard">'+esc(a.lastGuardrail)+'</span> ';
+    if (a.mode === 'advisor' && a.recommendedReplicas) p += '<span class="pill advisor">recommends '+a.recommendedReplicas+'</span> ';
+    return p;
+  }
+  // Which engine decided, which guardrail changed it, which patterns fired.
+  function cardPills(d) {
+    var p = [];
+    if (d.provider) p.push('<span class="pill prov">'+esc(d.provider)+'</span>');
+    if (d.guardrail) p.push('<span class="pill guard">guardrail: '+esc(d.guardrail)+'</span>');
+    (d.patternsMatched||[]).forEach(function(n){ p.push('<span class="pill prov">'+esc(n)+'</span>'); });
+    return p.length ? '<div class="card-pills">'+p.join('')+'</div>' : '';
   }
   function ask(q){ document.getElementById('questionInput').value = q; sendQuestion(); }
   async function sendQuestion() {
@@ -409,7 +428,7 @@ var uiHTML = []byte(`<!DOCTYPE html>
         }
         return '<tr><td>'+esc(a.namespace)+'</td><td>'+esc(a.targetDeployment)+'</td><td>'+dry+'</td>'+
           '<td>'+a.minReplicas+'</td><td>'+a.maxReplicas+'</td><td>'+a.currentReplicas+'</td><td>'+mode+'</td>'+
-          '<td style="max-width:280px">'+esc(a.lastDecisionReason||'—')+'</td><td style="white-space:nowrap">'+actions+'</td></tr>';
+          '<td style="max-width:280px">'+statusPills(a)+esc(a.lastDecisionReason||'—')+'</td><td style="white-space:nowrap">'+actions+'</td></tr>';
       }).join('');
     } catch(e) { body.innerHTML = '<tr><td colspan="9" class="empty-state">'+esc(e.message)+'</td></tr>'; }
   }

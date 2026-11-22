@@ -188,6 +188,94 @@ type DetectionConfig struct {
 	ScaleDownQuietWindowMinutes int32 `json:"scaleDownQuietWindowMinutes,omitempty"`
 }
 
+// BacklogConfig gives queue workers and agent runners a first-class backlog
+// signal. Leaving Query empty disables it, preserving the original behaviour.
+type BacklogConfig struct {
+	// Query is PromQL returning the number of queued work items for the whole
+	// Deployment (e.g. a queue-depth gauge); $TARGET is replaced with
+	// spec.targetDeployment. A failing query is logged and ignored for that
+	// reconcile, never fatal.
+	// +optional
+	Query string `json:"query,omitempty"`
+
+	// TargetPerReplica is how many queued items one replica should carry. The
+	// backlog rule asks for ceil(backlog / targetPerReplica) replicas, within
+	// min/max, and the quiet-window scale-down waits until the backlog fits.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	TargetPerReplica int32 `json:"targetPerReplica,omitempty"`
+}
+
+// AgenticConfig adds AI-agent workload signals. Each query is optional; an
+// empty one disables its guard, so an unset block preserves the original
+// behaviour exactly.
+type AgenticConfig struct {
+	// LLMRateLimitQuery is PromQL returning the percentage (0-100) of LLM calls
+	// the provider rejected with a rate limit (HTTP 429). $TARGET is substituted.
+	// +optional
+	LLMRateLimitQuery string `json:"llmRateLimitQuery,omitempty"`
+
+	// RateLimitHoldPercent: at or above this 429 rate any scale-up (other than
+	// an OOM emergency) becomes a hold, because a provider quota is shared by
+	// every replica — more workers only add calls against it. Default 20.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	RateLimitHoldPercent int32 `json:"rateLimitHoldPercent,omitempty"`
+
+	// TokenBudgetQuery is PromQL returning the percentage (0-100) of the LLM
+	// token budget already used in its period. $TARGET is substituted.
+	// +optional
+	TokenBudgetQuery string `json:"tokenBudgetQuery,omitempty"`
+
+	// TokenBudgetCapPercent: at or above this share of the token budget the
+	// cost guardrail blocks scale-ups (other than an OOM emergency). Default 90.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	TokenBudgetCapPercent int32 `json:"tokenBudgetCapPercent,omitempty"`
+}
+
+// PolicyConfig holds optional governance guardrails. Every field defaults to
+// off, so an unset block leaves decisions exactly as before. They narrow what
+// the operator may do; nothing here can widen min/max or bypass the cooldown.
+type PolicyConfig struct {
+	// MaxScaleStep caps how many replicas a single decision may add or remove.
+	// 0 (the default) means no cap beyond minReplicas/maxReplicas.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	MaxScaleStep int32 `json:"maxScaleStep,omitempty"`
+
+	// MinConfidence is a floor, 0-100, on an AI provider's confidence. A
+	// decision below MinConfidence/100 is discarded and the deterministic rule
+	// engine decides instead; the reason records why. 0 (the default) is off.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	MinConfidence int32 `json:"minConfidence,omitempty"`
+
+	// ApprovalAboveReplicas requires a human to approve any scale-up to more
+	// than this many replicas. Until the CR carries the annotation
+	// agentic-autoscaler.io/approved-replicas with a value >= the target, the
+	// decision is held and recorded in status.pendingApproval. 0 (the default)
+	// is off.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	ApprovalAboveReplicas int32 `json:"approvalAboveReplicas,omitempty"`
+}
+
+// PendingApproval is a scale-up held by spec.policy.approvalAboveReplicas.
+type PendingApproval struct {
+	// TargetReplicas is the replica count awaiting approval.
+	TargetReplicas int32 `json:"targetReplicas"`
+
+	// Reason is the decision's explanation.
+	Reason string `json:"reason"`
+
+	// Since is when the recommendation was first held.
+	Since metav1.Time `json:"since"`
+}
+
 // AgenticAutoscalerSpec defines the desired state of AgenticAutoscaler.
 type AgenticAutoscalerSpec struct {
 	// TargetDeployment is the name of the Deployment this CR manages.
@@ -253,6 +341,20 @@ type AgenticAutoscalerSpec struct {
 	// status.logPatternWarnings. Empty preserves the built-in behaviour.
 	// +optional
 	LogPatterns []LogPatternSpec `json:"logPatterns,omitempty"`
+
+	// Backlog adds a queue-depth signal for queue workers and agent runners.
+	// +optional
+	Backlog BacklogConfig `json:"backlog,omitempty"`
+
+	// Agentic adds AI-agent workload signals (LLM rate limiting, token budget)
+	// and enables the agentic built-in log patterns.
+	// +optional
+	Agentic AgenticConfig `json:"agentic,omitempty"`
+
+	// Policy adds governance guardrails: a per-decision step cap, a confidence
+	// floor for AI decisions, and an approval gate for large scale-ups.
+	// +optional
+	Policy PolicyConfig `json:"policy,omitempty"`
 }
 
 // AgenticAutoscalerStatus defines the observed state of AgenticAutoscaler.
@@ -280,6 +382,18 @@ type AgenticAutoscalerStatus struct {
 	// advisor mode.
 	// +optional
 	RecommendedReplicas int32 `json:"recommendedReplicas,omitempty"`
+
+	// LastGuardrail names the guardrail that changed the last decision
+	// (e.g. "cooldown", "max-scale-step", "llm-rate-limit", "paused"), or is
+	// empty when the decision went through as reasoned.
+	// +optional
+	LastGuardrail string `json:"lastGuardrail,omitempty"`
+
+	// PendingApproval is set while a scale-up waits for
+	// agentic-autoscaler.io/approved-replicas; cleared once applied or no
+	// longer recommended.
+	// +optional
+	PendingApproval *PendingApproval `json:"pendingApproval,omitempty"`
 
 	// ObservedGeneration is the .metadata.generation this status was produced from.
 	// +optional

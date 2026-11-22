@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -151,7 +152,7 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// extended/overridden by any custom spec.logPatterns. Invalid custom patterns
 	// are skipped (fail-safe) and surfaced in status; fusion still runs on the
 	// remaining valid set.
-	patterns, patternWarnings := effectivePatterns(aa.Spec.LogPatterns)
+	patterns, patternWarnings := patternsFor(aa.Spec)
 	if len(patternWarnings) > 0 {
 		logger.Info("skipped invalid custom log patterns", "warnings", patternWarnings)
 	}
@@ -175,7 +176,7 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// 4. Build a fresh Agent each reconcile — it needs the live replica count
 	// which changes across reconcile cycles.
-	agent := r.NewAgent(reasoning.Config{
+	agentCfg := reasoning.Config{
 		CurrentReplicas:  currentReplicas,
 		MinReplicas:      aa.Spec.MinReplicas,
 		MaxReplicas:      aa.Spec.MaxReplicas,
@@ -192,7 +193,12 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		ConsecutiveWindowThreshold: windowThreshold,
 		// Configurable scale-down quiet window (default 15m when unset/zero).
 		CleanWindow: time.Duration(aa.Spec.Detection.ScaleDownQuietWindowMinutes) * time.Minute,
-	})
+	}
+	applyWorkloadConfig(&agentCfg, aa.Spec)
+	agent := r.NewAgent(agentCfg)
+	if floor := aa.Spec.Policy.MinConfidence; floor > 0 {
+		agent = reasoning.WithConfidenceFloor(agent, reasoning.NewRuleBasedAgent(agentCfg), float64(floor)/100)
+	}
 	decision, err := agent.Decide(ctx, fused)
 	if err != nil {
 		// Reasoning failure is not fatal — fall back to hold and continue.
@@ -200,19 +206,17 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		observability.RecordAIProviderError(configuredProvider())
 		decision = reasoning.HoldDecision("reasoning error: " + err.Error())
 	}
+	// The workload guardrails bind every provider, not just the rule engine, so
+	// an LLM cannot reason past a provider rate limit or the token budget.
+	decision = reasoning.GuardWorkload(agentCfg, fused, decision)
 	// Stamp fields the observability recorder needs but agents can't set themselves.
 	decision.OldReplicas = currentReplicas
 	decision.PatternsMatched = patternNames(fused.MatchedPatterns)
 
-	// 5. Enforce policy: bounds, cooldown, HPA coexistence.
-	prePolicyAction := decision.Action
-	decision, err = r.Policy.Enforce(ctx, aa.Spec, aa.Status.LastScaleTime, decision)
+	// 5. Governance: pause, policy (cooldown, bounds, HPA, step cap), approval.
+	decision, pendingFor, err := r.govern(ctx, &aa, &deploy, decision)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("policy enforce: %w", err)
-	}
-	// A non-hold action converted to hold by Enforce means the cooldown was active.
-	if prePolicyAction != reasoning.ActionHold && decision.Action == reasoning.ActionHold {
-		observability.RecordCooldownSkip(aa.Spec.TargetDeployment)
+		return ctrl.Result{}, err
 	}
 	observability.RecordDecision(decision.Action, aa.Spec.TargetDeployment, decision.Provider,
 		time.Since(reconcileStart).Seconds())
@@ -231,6 +235,8 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	aa.Status.ObservedGeneration = aa.Generation
 	aa.Status.HPACoexistenceStatus = hpaCoexistenceStatus(aa.Spec)
 	aa.Status.RecommendedReplicas = recommended
+	aa.Status.LastGuardrail = decision.Guardrail
+	aa.Status.PendingApproval = pendingApproval(aa.Status.PendingApproval, pendingFor)
 
 	// Advance the sustained-quiet timer for the next reconcile: clear it while any
 	// pattern is active, and start it on the first pattern-free reconcile. This
@@ -408,9 +414,135 @@ func (h *k8sHPAReader) GetHPA(
 // The translation from the CRD type to fusion.Pattern lives here, not in
 // pkg/fusion, so that package stays free of Kubernetes types.
 func effectivePatterns(specs []scalingv1alpha1.LogPatternSpec) ([]fusion.Pattern, []string) {
-	// Copy the defaults so the package-level slice is never mutated or aliased.
-	patterns := make([]fusion.Pattern, len(fusion.DefaultPatterns))
-	copy(patterns, fusion.DefaultPatterns)
+	return mergePatterns(fusion.DefaultPatterns, specs)
+}
+
+// patternsFor returns the pattern set for one CR: the built-ins, plus the
+// agentic built-ins when spec.agentic is configured (so other services keep
+// their exact original fused signal), with spec.logPatterns merged on top.
+func patternsFor(spec scalingv1alpha1.AgenticAutoscalerSpec) ([]fusion.Pattern, []string) {
+	if !agenticEnabled(spec) {
+		return effectivePatterns(spec.LogPatterns)
+	}
+	base := make([]fusion.Pattern, 0, len(fusion.DefaultPatterns)+len(fusion.AgenticPatterns))
+	base = append(append(base, fusion.DefaultPatterns...), fusion.AgenticPatterns...)
+	return mergePatterns(base, spec.LogPatterns)
+}
+
+// Governance annotations and the global kill switch.
+const (
+	// PauseAnnotation set to "true" on the CR or its target Deployment forces
+	// every decision to hold until it is removed.
+	PauseAnnotation = "agentic-autoscaler.io/pause"
+	// pauseAllEnv set to "true" on the operator pauses every CR (Helm: pauseAll).
+	pauseAllEnv     = "AGENTIC_AUTOSCALER_PAUSE_ALL"
+	pausedValue     = "true"
+	guardrailPaused = "paused"
+)
+
+// pausedBy reports whether a human has paused this autoscaler, and how.
+func pausedBy(aa *scalingv1alpha1.AgenticAutoscaler, deploy *appsv1.Deployment) (string, bool) {
+	switch {
+	case os.Getenv(pauseAllEnv) == pausedValue:
+		return "paused by the operator-wide kill switch (" + pauseAllEnv + ")", true
+	case aa.Annotations[PauseAnnotation] == pausedValue:
+		return "paused by annotation " + PauseAnnotation + " on the AgenticAutoscaler", true
+	case deploy.Annotations[PauseAnnotation] == pausedValue:
+		return "paused by annotation " + PauseAnnotation + " on the Deployment", true
+	}
+	return "", false
+}
+
+// approvedReplicas parses the approval annotation; absent or invalid is 0.
+func approvedReplicas(aa *scalingv1alpha1.AgenticAutoscaler) int32 {
+	n, err := strconv.ParseInt(aa.Annotations[policy.ApprovalAnnotation], 10, 32)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return int32(n)
+}
+
+// govern applies the human and policy controls, in order: a pause (CR or
+// Deployment annotation, or the global kill switch) wins over any reasoning;
+// then policy.Enforce (cooldown, bounds, HPA, step cap); then the approval
+// gate, whose approval lives in a CR annotation. It returns the governed
+// decision and, when the approval gate held it, the scale-up awaiting approval.
+func (r *AgenticAutoscalerReconciler) govern(
+	ctx context.Context, aa *scalingv1alpha1.AgenticAutoscaler, deploy *appsv1.Deployment, d reasoning.ScaleDecision,
+) (reasoning.ScaleDecision, *reasoning.ScaleDecision, error) {
+	if why, paused := pausedBy(aa, deploy); paused && d.Action != reasoning.ActionHold {
+		d = reasoning.HeldBy(d, guardrailPaused, why)
+	}
+	d, err := r.Policy.Enforce(ctx, aa.Spec, aa.Status.LastScaleTime, d)
+	if err != nil {
+		return d, nil, fmt.Errorf("policy enforce: %w", err)
+	}
+	if d.Guardrail == "cooldown" {
+		observability.RecordCooldownSkip(aa.Spec.TargetDeployment)
+	}
+	preApproval := d
+	d, pending := policy.GateApproval(aa.Spec, approvedReplicas(aa), d)
+	if d.Guardrail != "" {
+		observability.RecordGuardrail(aa.Spec.TargetDeployment, d.Guardrail)
+	}
+	if pending {
+		return d, &preApproval, nil
+	}
+	return d, nil, nil
+}
+
+// pendingApproval keeps status.pendingApproval in step with the gate: set (or
+// kept, preserving Since, for the same target) while a scale-up is held for
+// approval, cleared as soon as it is not.
+func pendingApproval(prev *scalingv1alpha1.PendingApproval, held *reasoning.ScaleDecision) *scalingv1alpha1.PendingApproval {
+	if held == nil {
+		return nil
+	}
+	d := *held
+	if prev != nil && prev.TargetReplicas == d.TargetReplicas {
+		prev.Reason = d.Reason
+		return prev
+	}
+	return &scalingv1alpha1.PendingApproval{TargetReplicas: d.TargetReplicas, Reason: d.Reason, Since: metav1.Now()}
+}
+
+// Defaults for the agentic guards when their query is set but the threshold is not.
+const (
+	defaultRateLimitHoldPercent  = 20
+	defaultTokenBudgetCapPercent = 90
+)
+
+// applyWorkloadConfig copies the optional backlog and agentic settings into the
+// agent config. A guard is armed only when its signal's query is configured.
+func applyWorkloadConfig(cfg *reasoning.Config, spec scalingv1alpha1.AgenticAutoscalerSpec) {
+	if spec.Backlog.Query != "" {
+		cfg.BacklogPerReplica = spec.Backlog.TargetPerReplica
+	}
+	if spec.Agentic.LLMRateLimitQuery != "" {
+		cfg.RateLimitHoldPct = float64(orDefault(spec.Agentic.RateLimitHoldPercent, defaultRateLimitHoldPercent))
+	}
+	if spec.Agentic.TokenBudgetQuery != "" {
+		cfg.TokenBudgetCapPct = float64(orDefault(spec.Agentic.TokenBudgetCapPercent, defaultTokenBudgetCapPercent))
+	}
+}
+
+func orDefault(v, def int32) int32 {
+	if v > 0 {
+		return v
+	}
+	return def
+}
+
+// agenticEnabled reports whether the CR configures any agentic signal.
+func agenticEnabled(spec scalingv1alpha1.AgenticAutoscalerSpec) bool {
+	return spec.Agentic.LLMRateLimitQuery != "" || spec.Agentic.TokenBudgetQuery != ""
+}
+
+// mergePatterns copies base and merges the compiled custom specs onto it.
+func mergePatterns(base []fusion.Pattern, specs []scalingv1alpha1.LogPatternSpec) ([]fusion.Pattern, []string) {
+	// Copy the base so the package-level slices are never mutated or aliased.
+	patterns := make([]fusion.Pattern, len(base))
+	copy(patterns, base)
 
 	if len(specs) == 0 {
 		return patterns, nil

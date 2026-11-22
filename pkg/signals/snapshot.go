@@ -47,6 +47,19 @@ type MetricSnapshot struct {
 
 	// CustomMetrics holds any additional user-defined PromQL results keyed by name.
 	CustomMetrics map[string]float64
+
+	// Backlog is the number of queued work items, or nil when no backlog source
+	// is configured (or it failed this cycle). Nil and zero mean different things:
+	// nil disables every backlog-driven behaviour.
+	Backlog *float64
+
+	// LLMRateLimitedPct is the percentage of LLM calls the provider rejected
+	// with a rate limit, or nil when not configured.
+	LLMRateLimitedPct *float64
+
+	// TokenBudgetUsedPct is the percentage of the LLM token budget used, or nil
+	// when not configured.
+	TokenBudgetUsedPct *float64
 }
 
 // LogEntry is a single log line from Loki or Kafka, enriched with its labels.

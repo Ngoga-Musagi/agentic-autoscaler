@@ -130,6 +130,13 @@ func (c *PrometheusCollector) CollectWithQueries(ctx context.Context, targetDepl
 	}, nil
 }
 
+// Scalar runs one PromQL query with $TARGET replaced by target and returns its
+// first value (0 when Prometheus has no data). It backs the optional workload
+// signals, which are separate queries from the four core ones.
+func (c *PrometheusCollector) Scalar(ctx context.Context, target, promql string) (float64, error) {
+	return c.query(ctx, strings.ReplaceAll(promql, targetToken, target))
+}
+
 // query executes a single instant PromQL query and returns the first scalar result.
 // It returns 0 without error when Prometheus has no data for the query (empty vector),
 // since that is a valid state for services that have not yet received traffic.

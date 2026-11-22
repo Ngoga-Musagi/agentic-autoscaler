@@ -84,6 +84,11 @@ type autoscalerSummary struct {
 	LastDecisionReason string       `json:"lastDecisionReason,omitempty"`
 	LastScaleTime      *metav1.Time `json:"lastScaleTime,omitempty"`
 	CoexistenceStatus  string       `json:"coexistenceStatus,omitempty"`
+	// Governance and explainability: the last guardrail that changed a
+	// decision, a scale-up awaiting approval, and the advisor recommendation.
+	LastGuardrail           string `json:"lastGuardrail,omitempty"`
+	PendingApprovalReplicas int32  `json:"pendingApprovalReplicas,omitempty"`
+	RecommendedReplicas     int32  `json:"recommendedReplicas,omitempty"`
 }
 
 // patchRequest is the JSON body for PATCH /api/autoscalers/{ns}/{name}. Only the
@@ -479,6 +484,14 @@ func summarize(aa *scalingv1alpha1.AgenticAutoscaler) autoscalerSummary {
 		LastDecisionReason: aa.Status.LastDecisionReason,
 		LastScaleTime:      aa.Status.LastScaleTime,
 		CoexistenceStatus:  aa.Status.HPACoexistenceStatus,
+		LastGuardrail:      aa.Status.LastGuardrail,
+		PendingApprovalReplicas: func() int32 {
+			if aa.Status.PendingApproval == nil {
+				return 0
+			}
+			return aa.Status.PendingApproval.TargetReplicas
+		}(),
+		RecommendedReplicas: aa.Status.RecommendedReplicas,
 	}
 }
 

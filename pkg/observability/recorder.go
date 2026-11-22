@@ -41,6 +41,9 @@ type DecisionRecord struct {
 	Provider        string    `json:"provider"`
 	PatternsMatched []string  `json:"patternsMatched,omitempty"`
 	DryRun          bool      `json:"dryRun"`
+	// Guardrail names the guardrail that changed the decision, if any
+	// (cooldown, max-scale-step, llm-rate-limit, paused, …).
+	Guardrail string `json:"guardrail,omitempty"`
 }
 
 // NewDecisionRecord constructs a DecisionRecord from the live AgenticAutoscaler
@@ -70,6 +73,7 @@ func NewDecisionRecord(aa scalingv1alpha1.AgenticAutoscaler, d reasoning.ScaleDe
 		Provider:        d.Provider,
 		PatternsMatched: d.PatternsMatched,
 		DryRun:          aa.Spec.DryRun,
+		Guardrail:       d.Guardrail,
 	}
 }
 

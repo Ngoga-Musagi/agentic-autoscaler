@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"time"
 
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+
 	scalingv1alpha1 "github.com/Ngoga-Musagi/agentic-autoscaler/api/v1alpha1"
 	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/signals"
 )
@@ -57,6 +59,8 @@ func (d *DefaultSignalCollector) Collect(
 		return signals.SystemSnapshot{}, fmt.Errorf("prometheus: %w", err)
 	}
 
+	collectWorkloadSignals(ctx, collector, spec, &metrics)
+
 	var logEntries []signals.LogEntry
 	if spec.LogSource.Type == "loki" && spec.LogSource.Loki != nil {
 		reader := signals.NewLokiReader(spec.LogSource.Loki.URL, spec.LogSource.Loki.Query)
@@ -71,4 +75,39 @@ func (d *DefaultSignalCollector) Collect(
 		Metrics:    metrics,
 		LogEntries: logEntries,
 	}, nil
+}
+
+// collectWorkloadSignals fills the optional backlog and agentic signals. Unlike
+// the four core metrics, a failure here is logged and that signal left nil for
+// the cycle: an optional signal must never block a decision.
+func collectWorkloadSignals(
+	ctx context.Context, c *signals.PrometheusCollector, spec scalingv1alpha1.AgenticAutoscalerSpec, m *signals.MetricSnapshot,
+) {
+	logger := ctrllog.FromContext(ctx)
+	if spec.Backlog.Query != "" {
+		var src signals.BacklogSource = signals.NewPromQLBacklog(c, spec.TargetDeployment, spec.Backlog.Query)
+		if v, err := src.Backlog(ctx); err != nil {
+			logger.Error(err, "backlog signal unavailable this cycle; continuing without it")
+		} else {
+			m.Backlog = &v
+		}
+	}
+	optional := []struct {
+		name, query string
+		dst         **float64
+	}{
+		{"llm rate-limit", spec.Agentic.LLMRateLimitQuery, &m.LLMRateLimitedPct},
+		{"token budget", spec.Agentic.TokenBudgetQuery, &m.TokenBudgetUsedPct},
+	}
+	for _, o := range optional {
+		if o.query == "" {
+			continue
+		}
+		v, err := c.Scalar(ctx, spec.TargetDeployment, o.query)
+		if err != nil {
+			logger.Error(err, "optional signal unavailable this cycle; continuing without it", "signal", o.name)
+			continue
+		}
+		*o.dst = &v
+	}
 }

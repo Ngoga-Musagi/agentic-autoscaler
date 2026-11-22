@@ -62,6 +62,43 @@ type Pattern struct {
 	Score float64
 }
 
+// AgenticPatterns are built-in patterns for AI-agent workloads. They are added
+// to DefaultPatterns only when an AgenticAutoscaler sets spec.agentic, so a
+// regular service whose logs happen to mention a "rate limit" keeps exactly its
+// original fused signal. A spec.logPatterns entry with the same name overrides one.
+var AgenticPatterns = []Pattern{
+	{
+		Name:     "llm-rate-limited",
+		Re:       regexp.MustCompile(`(?i)rate.?limit|HTTP 429|status 429`),
+		Severity: "critical",
+		Score:    0.8,
+	},
+	{
+		Name:     "tool-timeout",
+		Re:       regexp.MustCompile(`tool .* timed out|tool timeout`),
+		Severity: "warning",
+		Score:    0.6,
+	},
+	{
+		Name:     "context-overflow",
+		Re:       regexp.MustCompile(`context length exceeded|maximum context length`),
+		Severity: "warning",
+		Score:    0.5,
+	},
+	{
+		Name:     "agent-max-iterations",
+		Re:       regexp.MustCompile(`max(imum)? iterations reached`),
+		Severity: "warning",
+		Score:    0.5,
+	},
+	{
+		Name:     "worker-pool-saturated",
+		Re:       regexp.MustCompile(`worker pool saturated|all \d+ workers busy`),
+		Severity: "critical",
+		Score:    0.7,
+	},
+}
+
 // DefaultPatterns is the built-in set of patterns the correlator checks.
 // Patterns are matched case-sensitively against raw log messages after ANSI
 // stripping; the ordering does not matter — all patterns are evaluated.

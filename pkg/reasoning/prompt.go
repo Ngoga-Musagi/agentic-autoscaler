@@ -17,6 +17,7 @@ limitations under the License.
 package reasoning
 
 import (
+	"fmt"
 	"strings"
 	"text/template"
 
@@ -55,6 +56,13 @@ Log patterns detected:{{range .Patterns}}
 Log patterns detected: none
 {{- end}}
 Severity score: {{printf "%.2f" .SeverityScore}} (0.00 = healthy, 1.00 = critical)
+{{- if .WorkloadLines}}
+
+Workload signals:{{range .WorkloadLines}}
+  - {{.}}{{end}}
+An LLM provider's rate limit is shared by every replica: adding replicas does not relieve it.
+Do not scale up at or above the token-budget cap.
+{{- end}}
 
 Respond with ONLY valid JSON. targetReplicas must be in [{{.MinReplicas}}, {{.MaxReplicas}}]:
 {"action":"scale-up|scale-down|hold","targetReplicas":N,"confidence":0.0-1.0,"reason":"one sentence for on-call SREs"}`))
@@ -71,6 +79,7 @@ type promptData struct {
 	RequestsPerSec   float64
 	Patterns         []fusion.PatternMatch
 	SeverityScore    float64
+	WorkloadLines    []string
 }
 
 // BuildPrompt renders the user-turn message for the AI provider from the
@@ -87,10 +96,35 @@ func BuildPrompt(cfg Config, signal fusion.FusedSignal) string {
 		RequestsPerSec:   signal.Snapshot.Metrics.RequestsPerSec,
 		Patterns:         signal.MatchedPatterns,
 		SeverityScore:    signal.SeverityScore,
+		WorkloadLines:    workloadLines(cfg, signal),
 	}
 	var buf strings.Builder
 	// Template is compiled at init; Execute can only fail on I/O errors from
 	// the writer, which strings.Builder never produces.
 	_ = userPromptTmpl.Execute(&buf, data)
 	return buf.String()
+}
+
+// workloadLines renders the optional backlog and agentic signals for the
+// prompt. It is empty for a service without them, which leaves the prompt
+// byte-for-byte as it was before these signals existed.
+func workloadLines(cfg Config, signal fusion.FusedSignal) []string {
+	m := signal.Snapshot.Metrics
+	var lines []string
+	if m.Backlog != nil {
+		line := fmt.Sprintf("Queued work items: %.0f", *m.Backlog)
+		if cfg.BacklogPerReplica > 0 {
+			line += fmt.Sprintf(" (target %d per replica)", cfg.BacklogPerReplica)
+		}
+		lines = append(lines, line)
+	}
+	if m.LLMRateLimitedPct != nil {
+		lines = append(lines, fmt.Sprintf("LLM calls rejected by provider rate limit: %.1f%% (hold at %.0f%%)",
+			*m.LLMRateLimitedPct, cfg.RateLimitHoldPct))
+	}
+	if m.TokenBudgetUsedPct != nil {
+		lines = append(lines, fmt.Sprintf("Token budget used: %.1f%% (scale-up cap %.0f%%)",
+			*m.TokenBudgetUsedPct, cfg.TokenBudgetCapPct))
+	}
+	return lines
 }

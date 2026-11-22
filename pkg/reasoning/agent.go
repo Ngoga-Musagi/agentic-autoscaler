@@ -68,6 +68,11 @@ type ScaleDecision struct {
 	// PatternsMatched lists the log pattern names that fired during signal
 	// fusion and influenced this decision.
 	PatternsMatched []string
+
+	// Guardrail names the guardrail that changed this decision after it was
+	// reasoned ("llm-rate-limit", "token-budget", "min-confidence", "cooldown",
+	// "max-scale-step", "approval-required", "paused"); empty when none did.
+	Guardrail string
 }
 
 // Config holds every value an Agent implementation needs at construction time.
@@ -121,6 +126,18 @@ type Config struct {
 	// rule fires, from spec.detection.scaleDownQuietWindowMinutes. Zero means use
 	// the built-in default (15 minutes).
 	CleanWindow time.Duration
+
+	// BacklogPerReplica is spec.backlog.targetPerReplica: queued items one
+	// replica should carry. Zero (or no backlog signal) disables the backlog rule.
+	BacklogPerReplica int32
+
+	// RateLimitHoldPct is the LLM 429 percentage at or above which GuardWorkload
+	// turns scale-ups into holds. Zero disables the guard.
+	RateLimitHoldPct float64
+
+	// TokenBudgetCapPct is the token-budget percentage at or above which
+	// GuardWorkload blocks scale-ups. Zero disables the guard.
+	TokenBudgetCapPct float64
 }
 
 // NewAgent returns the Agent implementation selected by cfg.Provider.

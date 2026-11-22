@@ -79,3 +79,78 @@ func TestCollectWithQueriesSendsOverride(t *testing.T) {
 		t.Errorf("custom RPS query was not sent; captured=%v", captured)
 	}
 }
+
+// A service with its own metric names (the multi-service demo's checkout) must
+// produce a correct snapshot purely from spec.metrics overrides: every query
+// reaches Prometheus with the target substituted, and each result lands in the
+// right field (latency converted from seconds to ms).
+func TestCollectWithQueries_NonDefaultNamesProduceSnapshot(t *testing.T) {
+	answers := map[string]string{
+		`histogram_quantile(0.99, sum by (le) (rate(shop_request_seconds_bucket{app="checkout"}[2m]))) >= 0`:                              "2.75",
+		`sum(rate(shop_requests_total{app="checkout",code=~"5.."}[2m])) / (sum(rate(shop_requests_total{app="checkout"}[2m])) > 0) * 100`: "4",
+		`avg(rate(container_cpu_usage_seconds_total{pod=~"checkout-.*"}[2m])) * 100`:                                                      "3.5",
+		`sum(rate(shop_requests_total{app="checkout"}[2m]))`:                                                                              "120",
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		v, ok := answers[r.URL.Query().Get("query")]
+		if !ok {
+			t.Errorf("unexpected query: %s", r.URL.Query().Get("query"))
+			v = "0"
+		}
+		fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1,%q]}]}}`, v)
+	}))
+	defer srv.Close()
+
+	got, err := NewPrometheusCollector(srv.URL).CollectWithQueries(context.Background(), "checkout", Queries{
+		LatencyP99:        `histogram_quantile(0.99, sum by (le) (rate(shop_request_seconds_bucket{app="$TARGET"}[2m]))) >= 0`,
+		ErrorRate:         `sum(rate(shop_requests_total{app="$TARGET",code=~"5.."}[2m])) / (sum(rate(shop_requests_total{app="$TARGET"}[2m])) > 0) * 100`,
+		CPUUtilization:    `avg(rate(container_cpu_usage_seconds_total{pod=~"$TARGET-.*"}[2m])) * 100`,
+		RequestsPerSecond: `sum(rate(shop_requests_total{app="$TARGET"}[2m]))`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := MetricSnapshot{LatencyP99Ms: 2750, ErrorRatePct: 4, CPUUtilPct: 3.5, RequestsPerSec: 120}
+	if got.LatencyP99Ms != want.LatencyP99Ms || got.ErrorRatePct != want.ErrorRatePct ||
+		got.CPUUtilPct != want.CPUUtilPct || got.RequestsPerSec != want.RequestsPerSec {
+		t.Errorf("snapshot: want %+v, got %+v", want, got)
+	}
+}
+
+func TestPromQLBacklog_SubstitutesTargetAndTreatsNoDataAsZero(t *testing.T) {
+	var got []string
+	empty := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.URL.Query().Get("query"))
+		if empty {
+			fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+			return
+		}
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1,"180"]}]}}`)
+	}))
+	defer srv.Close()
+
+	var src BacklogSource = NewPromQLBacklog(NewPrometheusCollector(srv.URL), "agent-runner",
+		`sum(agent_tasks_queued{app="$TARGET"})`)
+	v, err := src.Backlog(context.Background())
+	if err != nil || v != 180 {
+		t.Fatalf("backlog: want 180, got %v (err %v)", v, err)
+	}
+	if got[0] != `sum(agent_tasks_queued{app="agent-runner"})` {
+		t.Errorf("query not substituted: %s", got[0])
+	}
+	empty = true
+	if v, err := src.Backlog(context.Background()); err != nil || v != 0 {
+		t.Errorf("no data: want 0, got %v (err %v)", v, err)
+	}
+}
+
+func TestPromQLBacklog_PropagatesPrometheusErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	if _, err := NewPromQLBacklog(NewPrometheusCollector(srv.URL), "x", "q").Backlog(context.Background()); err == nil {
+		t.Fatal("want an error so the caller can skip the signal")
+	}
+}

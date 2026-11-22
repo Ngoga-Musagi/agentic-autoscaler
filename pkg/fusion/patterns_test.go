@@ -84,3 +84,32 @@ func TestCorrelateWithPatterns_EmptySetMatchesNothing(t *testing.T) {
 			patternNames(got.MatchedPatterns), got.SeverityScore)
 	}
 }
+
+func TestAgenticPatterns_MatchAgentFailureLinesAndStayDistinct(t *testing.T) {
+	lines := map[string]string{
+		"llm-rate-limited":      "WARN LLM rate limited (HTTP 429) on attempt 2, backing off",
+		"tool-timeout":          "ERROR tool web-search timed out after 2s",
+		"context-overflow":      "WARN context length exceeded: prompt 131072 tokens > 128000 limit",
+		"agent-max-iterations":  "agent stopped: max iterations reached (25)",
+		"worker-pool-saturated": "WARN agent worker pool saturated: all 4 workers busy, task queued 2300ms",
+	}
+	builtin := map[string]bool{}
+	for _, p := range DefaultPatterns {
+		builtin[p.Name] = true
+	}
+	for _, p := range AgenticPatterns {
+		if builtin[p.Name] {
+			t.Errorf("%s collides with a default pattern name", p.Name)
+		}
+		line, ok := lines[p.Name]
+		if !ok {
+			t.Errorf("no sample line for %s", p.Name)
+			continue
+		}
+		for _, other := range AgenticPatterns {
+			if got := other.Re.MatchString(line); got != (other.Name == p.Name) {
+				t.Errorf("line for %s: match %s = %v", p.Name, other.Name, got)
+			}
+		}
+	}
+}

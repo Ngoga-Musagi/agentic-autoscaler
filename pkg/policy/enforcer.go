@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -48,6 +49,11 @@ type HPAReader interface {
 //  2. Cooldown: if the last scale action was within CooldownSeconds, return hold.
 //  3. Clamp TargetReplicas to [spec.MinReplicas, spec.MaxReplicas].
 //  4. Calibrated coexistence: additionally clamp within the live HPA's bounds.
+//  5. spec.policy.maxScaleStep: cap how far one decision may move from the
+//     current replica count (after the bounds, so it can only narrow them).
+//
+// The approval gate (GateApproval) runs after Enforce, in the controller,
+// because approval lives in an annotation rather than in the spec.
 type Enforcer struct {
 	cooldown  *CooldownChecker
 	hpaReader HPAReader
@@ -82,7 +88,8 @@ func (e *Enforcer) Enforce(
 	if e.cooldown.IsActive(lastScaleTime, spec.CooldownSeconds, e.now()) {
 		log.Printf("INFO: policy: cooldown active (%ds window), converting %s to hold",
 			spec.CooldownSeconds, decision.Action)
-		return reasoning.HoldDecision("cooldown active: skipping scale action until window expires"), nil
+		return reasoning.HeldBy(decision, "cooldown",
+			fmt.Sprintf("cooldown active (%ds window)", spec.CooldownSeconds)), nil
 	}
 
 	// Clamp to the bounds declared in the CR spec.
@@ -102,7 +109,66 @@ func (e *Enforcer) Enforce(
 		}
 	}
 
-	return decision, nil
+	return noOpAtBound(capStep(decision, spec.Policy.MaxScaleStep)), nil
+}
+
+// noOpAtBound turns a scale action that clamping reduced to the current count
+// into a hold that says so. Without it a service pinned at maxReplicas logs a
+// "scale-up 10 → 10" every cycle, which reads as action when nothing happens.
+func noOpAtBound(d reasoning.ScaleDecision) reasoning.ScaleDecision {
+	if d.Action == reasoning.ActionHold || d.OldReplicas <= 0 || d.TargetReplicas != d.OldReplicas {
+		return d
+	}
+	limit := "fewest"
+	if d.Action == "scale-up" {
+		limit = "most"
+	}
+	h := reasoning.HeldBy(d, "replica-bounds",
+		fmt.Sprintf("held: already at %d replicas, the %s this policy allows", d.OldReplicas, limit))
+	h.Reason = strings.Replace(h.Reason, fmt.Sprintf("; would have scaled to %d replicas", d.TargetReplicas), "", 1)
+	return h
+}
+
+// capStep limits the distance from the current replica count to maxStep. It
+// needs the current count (decision.OldReplicas, stamped by the controller) and
+// does nothing when either is unset.
+func capStep(decision reasoning.ScaleDecision, maxStep int32) reasoning.ScaleDecision {
+	cur := decision.OldReplicas
+	if maxStep <= 0 || cur <= 0 {
+		return decision
+	}
+	wanted := decision.TargetReplicas
+	switch {
+	case wanted > cur+maxStep:
+		decision.TargetReplicas = cur + maxStep
+	case wanted < cur-maxStep:
+		decision.TargetReplicas = cur - maxStep
+	default:
+		return decision
+	}
+	decision.Guardrail = "max-scale-step"
+	decision.Reason = fmt.Sprintf("%s [capped by maxScaleStep %d: wanted %d, applying %d → %d]",
+		decision.Reason, maxStep, wanted, cur, decision.TargetReplicas)
+	log.Printf("INFO: policy: maxScaleStep %d capped targetReplicas %d → %d", maxStep, wanted, decision.TargetReplicas)
+	return decision
+}
+
+// ApprovalAnnotation is the CR annotation a human sets to approve scale-ups up
+// to a replica count when spec.policy.approvalAboveReplicas is configured.
+const ApprovalAnnotation = "agentic-autoscaler.io/approved-replicas"
+
+// GateApproval holds a scale-up whose target exceeds
+// spec.policy.approvalAboveReplicas unless approved (the parsed
+// ApprovalAnnotation, 0 when absent) covers it. It reports whether the
+// decision is now pending approval. Scale-downs and holds pass through.
+func GateApproval(spec v1alpha1.AgenticAutoscalerSpec, approved int32, d reasoning.ScaleDecision) (reasoning.ScaleDecision, bool) {
+	limit := spec.Policy.ApprovalAboveReplicas
+	if limit <= 0 || d.Action != "scale-up" || d.TargetReplicas <= limit || approved >= d.TargetReplicas {
+		return d, false
+	}
+	return reasoning.HeldBy(d, "approval-required", fmt.Sprintf(
+		"awaiting approval: %d replicas exceeds approvalAboveReplicas %d — set annotation %s=%d to allow it",
+		d.TargetReplicas, limit, ApprovalAnnotation, d.TargetReplicas)), true
 }
 
 // clampToCRBounds clamps TargetReplicas to [min, max] and logs a warning if

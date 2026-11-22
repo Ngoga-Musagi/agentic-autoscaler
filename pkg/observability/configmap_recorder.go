@@ -91,6 +91,7 @@ func (r *ConfigMapRecorder) Record(
 		"provider", rec.Provider,
 		"patterns", rec.PatternsMatched,
 		"dryRun", rec.DryRun,
+		"guardrail", rec.Guardrail,
 		"timestamp", rec.Timestamp,
 	)
 

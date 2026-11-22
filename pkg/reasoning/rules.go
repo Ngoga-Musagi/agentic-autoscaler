@@ -57,13 +57,18 @@ func NewRuleBasedAgent(cfg Config) Agent {
 // "gate" is the consecutive-window requirement: the sustained scale-up rules
 // (2 and 4) fire only once a qualifying log pattern has persisted across
 // cfg.ConsecutiveWindowThreshold reconciles. The emergency OOM rule (1) and the
-// metric-driven error-rate rule (3) are never gated.
+// metric-driven error-rate rule (3) are never gated. Rule B (backlog → scale up
+// to ceil(backlog / targetPerReplica), confidence 0.85) sits after rule 1 and
+// exists only when spec.backlog is configured, so for every other service the
+// order is exactly rules 1–6. Finally GuardWorkload may turn a scale-up into a hold (provider
+// rate limiting, token budget) — again only when those signals are configured.
 func (r *RuleBasedAgent) Decide(ctx context.Context, s fusion.FusedSignal) (ScaleDecision, error) {
 	d, err := r.decide(ctx, s)
 	if err != nil {
 		return d, err
 	}
-	d.Provider = "rule-based"
+	d = GuardWorkload(r.cfg, s, d)
+	d.Provider = providerRuleBased
 	return d, nil
 }
 
@@ -77,6 +82,22 @@ func (r *RuleBasedAgent) decide(_ context.Context, s fusion.FusedSignal) (ScaleD
 		target := scaleUpByFraction(cur, 0.50, r.cfg.MaxReplicas)
 		return ScaleUpDecision(cur, target, 0.95,
 			"OOMKilled detected: adding capacity before next restart"), nil
+	}
+
+	// Rule B: backlog (only when spec.backlog is configured). Queued work that
+	// the current replicas cannot carry at the target per-replica depth needs
+	// more workers, whatever CPU says — queue workers and agent runners wait on
+	// I/O. Without a backlog signal this rule never fires, so the original rule
+	// order is unchanged for every other service.
+	if want, ok := backlogReplicas(r.cfg, s); ok && want > cur && cur < r.cfg.MaxReplicas {
+		target := want
+		if target > r.cfg.MaxReplicas {
+			target = r.cfg.MaxReplicas
+		}
+		b := *m.Backlog
+		return ScaleUpDecision(cur, target, 0.85, fmt.Sprintf(
+			"backlog of %.0f queued items is %.1f per replica against a target of %d",
+			b, b/float64(cur), r.cfg.BacklogPerReplica)), nil
 	}
 
 	// Rule 2: connection-pool exhaustion combined with elevated latency is a
@@ -116,9 +137,13 @@ func (r *RuleBasedAgent) decide(_ context.Context, s fusion.FusedSignal) (ScaleD
 		if target > r.cfg.MaxReplicas {
 			target = r.cfg.MaxReplicas
 		}
+		// With a backlog signal, never release capacity the queue still needs.
+		if want, ok := backlogReplicas(r.cfg, s); ok && want > target {
+			target = cur
+		}
 		if cur > target {
 			return ScaleDownDecision(cur, target, 0.60,
-				"all signals healthy for 15+ minutes, releasing excess capacity"), nil
+				fmt.Sprintf("all signals healthy for %s, releasing excess capacity", atLeast(r.cleanWindow()))), nil
 		}
 	}
 
@@ -130,11 +155,15 @@ func (r *RuleBasedAgent) decide(_ context.Context, s fusion.FusedSignal) (ScaleD
 // CleanSince means patterns are active (or the window has not yet started), so
 // the window is never considered reached.
 func (r *RuleBasedAgent) cleanWindowReached() bool {
-	window := r.cfg.CleanWindow
-	if window <= 0 {
-		window = cleanWindowDuration // default 15 minutes
+	return r.cfg.CleanSince != nil && time.Since(r.cfg.CleanSince.Time) >= r.cleanWindow()
+}
+
+// cleanWindow is the configured quiet window, defaulting to 15 minutes.
+func (r *RuleBasedAgent) cleanWindow() time.Duration {
+	if r.cfg.CleanWindow <= 0 {
+		return cleanWindowDuration
 	}
-	return r.cfg.CleanSince != nil && time.Since(r.cfg.CleanSince.Time) >= window
+	return r.cfg.CleanWindow
 }
 
 // consecutiveWindowThreshold returns the effective sustained-window requirement,
@@ -164,4 +193,16 @@ func (r *RuleBasedAgent) sustainedReason(base string) string {
 		return fmt.Sprintf("%s across %d consecutive windows", base, t)
 	}
 	return base
+}
+
+// atLeast renders a quiet window the way an on-call reads it ("15+ minutes",
+// "1+ minute"); windows that are not whole minutes use Go's notation.
+func atLeast(d time.Duration) string {
+	if d%time.Minute != 0 {
+		return d.String() + "+"
+	}
+	if m := int(d / time.Minute); m != 1 {
+		return fmt.Sprintf("%d+ minutes", m)
+	}
+	return "1+ minute"
 }
