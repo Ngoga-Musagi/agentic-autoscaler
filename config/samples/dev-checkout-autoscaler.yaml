@@ -1,0 +1,49 @@
+# Multi-service demo — AgenticAutoscaler for checkout (deploy/checkout/checkout.yaml).
+#
+# checkout does NOT use the default http_* metric names: it exposes
+# shop_request_seconds / shop_requests_total labelled app/code. This CR points
+# the unchanged operator at those names via spec.metrics ($TARGET → checkout).
+# That is the whole onboarding cost for a service with its own naming scheme.
+#
+# The storm (bash hack/demo.sh checkout-storm-up) injects >2 s latency and
+# "connection pool exhausted" logs, so rule 2 / the LLM scale it while CPU
+# stays flat.
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: checkout-autoscaler
+  namespace: shop
+  labels:
+    app.kubernetes.io/managed-by: agentic-autoscaler
+spec:
+  targetDeployment: checkout
+  prometheusURL: "http://prometheus-operated.monitoring:9090"
+
+  # Non-default metric names. ">= 0" drops the NaN a histogram_quantile returns
+  # while idle, and the "> 0" divisor guard does the same for the ratio, so an
+  # idle service reports 0 rather than NaN.
+  metrics:
+    latencyP99:        'histogram_quantile(0.99, sum by (le) (rate(shop_request_seconds_bucket{app="$TARGET"}[2m]))) >= 0'
+    errorRate:         'sum(rate(shop_requests_total{app="$TARGET",code=~"5.."}[2m])) / (sum(rate(shop_requests_total{app="$TARGET"}[2m])) > 0) * 100'
+    cpuUtilization:    'avg(rate(container_cpu_usage_seconds_total{pod=~"$TARGET-.*",container!="",container!="POD"}[2m])) * 100'
+    requestsPerSecond: 'sum(rate(shop_requests_total{app="$TARGET"}[2m]))'
+
+  logSource:
+    type: loki
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{namespace="shop", app="checkout"}'
+
+  minReplicas: 2
+  maxReplicas: 10
+  cooldownSeconds: 60
+  detection:
+    scaleDownQuietWindowMinutes: 2   # demo: show scale-down within minutes
+
+  dryRun: false                      # demo workload: scale live
+  hpaCoexistence:
+    mode: owner
+
+  aiProvider:
+    provider: anthropic
+    secretRef: "ai-provider-secret"

@@ -1,0 +1,56 @@
+# Archetype: service with bespoke failure logs — add custom patterns.
+#
+# Entries are merged with the five built-ins (connection-pool-exhausted,
+# upstream-timeout, oom-killed, circuit-breaker-open, db-connection-failed).
+# Reusing a built-in name overrides it; an invalid regex is skipped and
+# reported in status.logPatternWarnings — never fatal.
+#
+# score is an integer weight 0-100 (85 → 0.85 of the fused severity score).
+#
+# What custom patterns do and do not do: they raise the fused severity score
+# (which blocks the quiet-window scale-down) and they reach the LLM by name and
+# count. The deterministic rules only act on the built-in names, so to make a
+# custom string drive the rule engine directly, reuse a built-in name — e.g. map
+# your own pool-saturation message onto "connection-pool-exhausted" (last entry).
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: gateway-autoscaler
+  namespace: edge
+spec:
+  targetDeployment: gateway
+  prometheusURL: "http://prometheus.monitoring:9090"
+  logSource:
+    type: loki
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{namespace="edge", app="gateway"}'
+  logPatterns:
+    - name: tls-handshake-timeout
+      regex: 'tls: handshake timeout'
+      severity: warning
+      score: 50
+    - name: dns-failure
+      regex: 'no such host|dns lookup failed'
+      severity: critical
+      score: 70
+    - name: saga-rollback
+      regex: 'saga .* rolled back'
+      severity: warning
+      score: 60
+    # Overrides the built-in so rule 2 fires on this service's own wording.
+    - name: connection-pool-exhausted
+      regex: 'connection pool exhausted|upstream pool saturated'
+      severity: critical
+      score: 80
+  detection:
+    consecutiveWindows: 2      # a pattern must persist 2 windows before rules 2/4 fire
+  minReplicas: 3
+  maxReplicas: 30
+  cooldownSeconds: 120
+  dryRun: true
+  hpaCoexistence:
+    mode: advisor
+  aiProvider:
+    provider: anthropic
+    secretRef: ai-provider-secret

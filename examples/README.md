@@ -1,21 +1,38 @@
-# Example `AgenticAutoscaler` CRs
+# Example `AgenticAutoscaler` CRs — one per service archetype
 
-Three ready-to-adapt CRs covering the main ways the operator is used. Each opts a
-single Deployment into agentic autoscaling — drop one next to your Deployment's
-manifests. The operator only manages a Deployment that has a matching CR.
+Copy the file closest to your service, change the names, apply it next to the
+Deployment. The operator manages a Deployment **only** when a CR targets it.
+Every file here is checked in CI: it must decode strictly into the API type
+(`api/v1alpha1/examples_test.go`) and be accepted by a real API server running
+the generated CRD (`internal/controller/examples_envtest_test.go`).
 
-| File | Mode | Shows |
-|------|------|-------|
-| [`calibrated-coexistence.yaml`](calibrated-coexistence.yaml) | `calibrated` | runs **inside an existing HPA's bounds** (HPA stays as a safety net) — the recommended way to roll out |
-| [`owner-mode.yaml`](owner-mode.yaml) | `owner` | agentic autoscaler is the **sole** controller of replicas (HPA deleted/suspended) |
-| [`custom-service.yaml`](custom-service.yaml) | `owner` | a **non-podinfo** service: per-CR `spec.metrics` for different metric names, custom `spec.logPatterns`, and `spec.detection.consecutiveWindows` — proves the reusability story |
+| File | Archetype | Shows |
+|------|-----------|-------|
+| [`http-api.yaml`](http-api.yaml) | Standard HTTP API | **zero overrides** — the default queries fit `http_*{service=…}` metrics |
+| [`custom-metrics.yaml`](custom-metrics.yaml) | Own metric names | override the 4 PromQL queries via `spec.metrics` (`$TARGET` = Deployment name) |
+| [`custom-logpatterns.yaml`](custom-logpatterns.yaml) | Bespoke failure logs | add patterns via `spec.logPatterns`; reuse a built-in name to drive the rules |
+| [`queue-worker.yaml`](queue-worker.yaml) | Queue worker | map the slots onto jobs and scale on **backlog** (`spec.backlog`) |
+| [`agent-runner.yaml`](agent-runner.yaml) | AI-agent workers | backlog + LLM rate-limit + token-budget signals (`spec.agentic`), agentic log patterns |
+| [`advisor-mode.yaml`](advisor-mode.yaml) | Keep your HPA/KEDA | publish a recommendation; your autoscaler scales on max(CPU, agent) |
+| [`calibrated-coexistence.yaml`](calibrated-coexistence.yaml) | HPA with no live scaling | operator writes replicas, clamped inside the HPA's min/max |
+| [`owner-mode.yaml`](owner-mode.yaml) | No HPA | operator is the sole controller of replicas |
+| [`custom-service.yaml`](custom-service.yaml) | Everything at once | metrics + patterns + the consecutive-window gate |
+
+Live versions of these run in the multi-service demo: `config/samples/dev-*.yaml`
+(see [docs/demo.md](../docs/demo.md)).
 
 ## Rollout discipline (applies to all)
 
-1. Start with `dryRun: true` — the operator logs decisions and annotates Grafana but never changes replicas.
-2. Review the decision log / Grafana annotations for ~7 days.
-3. For an existing HPA, promote to `calibrated` first (HPA remains the safety net); only move to `owner` after 2+ weeks of correct decisions, then delete the HPA.
+1. **Shadow** — `dryRun: true` (the default in every file here): it decides and
+   explains on Grafana and in the audit log, but never changes replicas. ≥ 7 days.
+2. **Advisor** — `hpaCoexistence.mode: advisor`, `dryRun: false`: add its metric
+   as one trigger on your existing HPA/KEDA. Your autoscaler stays the writer.
+3. **Owner** (optional) — hand over `spec.replicas` once the decision log has
+   earned trust. Still clamped to `minReplicas`/`maxReplicas` and the cooldown.
 
 API keys for a cloud AI provider are **never** in the CR — they come from a
 Kubernetes Secret referenced by the operator Deployment (see
 `.claude/rules/security.md`). `spec.aiProvider.secretRef` only names the Secret.
+
+See [docs/onboarding.md](../docs/onboarding.md) for the 5-minute walkthrough and
+[docs/governance.md](../docs/governance.md) for the guardrails (`spec.policy`).

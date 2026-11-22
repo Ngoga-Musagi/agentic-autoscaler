@@ -1,0 +1,78 @@
+# Multi-service demo — AgenticAutoscaler for the AI-agent workers
+# (deploy/agent-runner/agent-runner.yaml).
+#
+# Agent workers wait on an LLM and on tools, so their CPU stays near idle while
+# they are overloaded — a CPU HPA never sees it. This CR reads what does move:
+#
+#   spec.metrics      the 4 slots mapped onto agent signals (task p99, failed
+#                     tasks, task rate)
+#   spec.logPatterns  the runner's failure lines; "worker pool saturated" reuses
+#                     the built-in connection-pool-exhausted name so rule 2
+#                     fires on saturated workers + task p99 > 2 s
+#   spec.backlog      queued tasks per replica → the backlog rule
+#   spec.agentic      the LLM provider's 429 rate and the token budget, so the
+#                     operator HOLDS when the provider (not worker capacity) is
+#                     the bottleneck, and stops adding workers near the budget
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: agent-runner-autoscaler
+  namespace: agents
+  labels:
+    app.kubernetes.io/managed-by: agentic-autoscaler
+spec:
+  targetDeployment: agent-runner
+  prometheusURL: "http://prometheus-operated.monitoring:9090"
+
+  metrics:
+    latencyP99:        'histogram_quantile(0.99, sum by (le) (rate(agent_task_seconds_bucket{app="$TARGET"}[2m]))) >= 0'
+    errorRate:         'sum(rate(agent_tasks_total{app="$TARGET",result!="ok"}[2m])) / (sum(rate(agent_tasks_total{app="$TARGET"}[2m])) > 0) * 100'
+    requestsPerSecond: 'sum(rate(agent_tasks_total{app="$TARGET"}[2m]))'
+
+  logSource:
+    type: loki
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{namespace="agents", app="agent-runner"}'
+
+  logPatterns:
+    - name: connection-pool-exhausted
+      regex: 'connection pool exhausted|worker pool saturated'
+      severity: critical
+      score: 80
+    - name: llm-rate-limited
+      regex: 'rate.?limit|HTTP 429'
+      severity: critical
+      score: 80
+    - name: tool-timeout
+      regex: 'tool .* timed out'
+      severity: warning
+      score: 60
+    - name: context-overflow
+      regex: 'context length exceeded'
+      severity: warning
+      score: 50
+
+  backlog:
+    query: 'sum(agent_tasks_queued{app="$TARGET"})'
+    targetPerReplica: 2              # ~half a runner's 4 worker slots: beyond that tasks wait
+
+  agentic:
+    llmRateLimitQuery: '100 * sum(rate(agent_llm_calls_total{app="$TARGET",outcome="rate_limited"}[2m])) / (sum(rate(agent_llm_calls_total{app="$TARGET"}[2m])) > 0)'
+    rateLimitHoldPercent: 20
+    tokenBudgetQuery: 'max(mockllm_token_budget_used_percent)'
+    tokenBudgetCapPercent: 90
+
+  minReplicas: 2
+  maxReplicas: 12
+  cooldownSeconds: 60
+  detection:
+    scaleDownQuietWindowMinutes: 2   # demo: show scale-down within minutes
+
+  dryRun: false                      # demo workload: scale live
+  hpaCoexistence:
+    mode: owner
+
+  aiProvider:
+    provider: anthropic
+    secretRef: "ai-provider-secret"

@@ -1,0 +1,32 @@
+# Archetype: standard HTTP API — zero overrides.
+#
+# Works when the service exposes the common Prometheus HTTP metrics with a
+# `service` label equal to the Deployment name:
+#   http_request_duration_seconds_bucket{service="checkout"}
+#   http_requests_total{service="checkout",status="..."}
+# If yours differ, start from custom-metrics.yaml instead.
+#
+# Starts in shadow mode (dryRun) and in advisor mode, so it changes nothing
+# until you add its metric to your HPA/KEDA and flip dryRun to false.
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: checkout-autoscaler
+  namespace: shop
+spec:
+  targetDeployment: checkout
+  prometheusURL: "http://prometheus.monitoring:9090"
+  logSource:
+    type: loki
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{namespace="shop", app="checkout"}'
+  minReplicas: 2
+  maxReplicas: 20
+  cooldownSeconds: 120
+  dryRun: true                 # shadow mode: decide + explain, never act
+  hpaCoexistence:
+    mode: advisor              # publish a metric; your HPA/KEDA scales
+  aiProvider:
+    provider: anthropic
+    secretRef: ai-provider-secret

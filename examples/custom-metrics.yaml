@@ -1,0 +1,40 @@
+# Archetype: service with NON-STANDARD metric names — override the 4 queries.
+#
+# Each query is plain PromQL; the literal $TARGET is replaced with
+# spec.targetDeployment. Unset fields keep the defaults, so override only what
+# differs. Expected units:
+#   latencyP99        seconds (the operator converts to ms)
+#   errorRate         percent 0-100
+#   cpuUtilization    percent
+#   requestsPerSecond requests/s
+# ">= 0" and the "> 0" divisor guard turn an idle service's NaN into "no data",
+# which the operator reads as 0.
+#
+# Live example of exactly this: deploy/checkout + config/samples/dev-checkout-autoscaler.yaml.
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: orders-autoscaler
+  namespace: shop
+spec:
+  targetDeployment: orders
+  prometheusURL: "http://prometheus.monitoring:9090"
+  metrics:
+    latencyP99:        'histogram_quantile(0.99, sum by (le) (rate(myapp_request_seconds_bucket{app="$TARGET"}[2m]))) >= 0'
+    errorRate:         'sum(rate(myapp_requests_total{app="$TARGET",code=~"5.."}[2m])) / (sum(rate(myapp_requests_total{app="$TARGET"}[2m])) > 0) * 100'
+    cpuUtilization:    'avg(rate(container_cpu_usage_seconds_total{pod=~"$TARGET-.*",container!="",container!="POD"}[2m])) * 100'
+    requestsPerSecond: 'sum(rate(myapp_requests_total{app="$TARGET"}[2m]))'
+  logSource:
+    type: loki
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{namespace="shop", app="orders"}'
+  minReplicas: 2
+  maxReplicas: 15
+  cooldownSeconds: 120
+  dryRun: true
+  hpaCoexistence:
+    mode: advisor
+  aiProvider:
+    provider: anthropic
+    secretRef: ai-provider-secret

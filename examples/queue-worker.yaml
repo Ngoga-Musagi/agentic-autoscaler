@@ -1,0 +1,46 @@
+# Archetype: queue worker — scale on backlog, not HTTP.
+#
+# A worker has no HTTP request latency, so map the query slots onto its job:
+#   latencyP99        → p99 time to process one message
+#   errorRate         → % of messages that failed
+#   requestsPerSecond → messages consumed per second
+# and give the backlog its own first-class signal (spec.backlog), which drives
+# the backlog rule: desired ≈ ceil(backlog / targetPerReplica), within min/max.
+#
+# Pair it with KEDA in advisor mode so the worker scales on
+# max(KEDA's queue trigger, the agent) — the agent adds the judgement a single
+# queue-length threshold lacks (e.g. holding while a downstream is failing).
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: invoice-worker-autoscaler
+  namespace: billing
+spec:
+  targetDeployment: invoice-worker
+  prometheusURL: "http://prometheus.monitoring:9090"
+  metrics:
+    latencyP99:        'histogram_quantile(0.99, sum by (le) (rate(worker_job_seconds_bucket{app="$TARGET"}[2m]))) >= 0'
+    errorRate:         'sum(rate(worker_jobs_total{app="$TARGET",result="failed"}[2m])) / (sum(rate(worker_jobs_total{app="$TARGET"}[2m])) > 0) * 100'
+    requestsPerSecond: 'sum(rate(worker_jobs_total{app="$TARGET"}[2m]))'
+  backlog:
+    query: 'sum(rabbitmq_queue_messages_ready{queue="invoices"})'
+    targetPerReplica: 50       # one worker comfortably drains ~50 queued jobs
+  logSource:
+    type: loki
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{namespace="billing", app="invoice-worker"}'
+  logPatterns:
+    - name: poison-message
+      regex: 'moved to dead.?letter|poison message'
+      severity: warning
+      score: 40
+  minReplicas: 1
+  maxReplicas: 40
+  cooldownSeconds: 90
+  dryRun: true
+  hpaCoexistence:
+    mode: advisor
+  aiProvider:
+    provider: anthropic
+    secretRef: ai-provider-secret

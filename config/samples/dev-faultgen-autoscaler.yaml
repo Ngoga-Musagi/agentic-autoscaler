@@ -36,6 +36,10 @@ spec:
   # Safe default: record decisions without executing. Set false to scale live.
   dryRun: true
 
+  # No HPA targets faultgen, so the operator is the sole controller.
+  hpaCoexistence:
+    mode: owner
+
   aiProvider:
     provider: anthropic                 # runtime provider is set by AI_PROVIDER;
     secretRef: "ai-provider-secret"     # rule 2 is deterministic (rule-based)

@@ -1,3 +1,7 @@
+# Minimal AgenticAutoscaler (applied by `kubectl apply -k config/samples`).
+# Shadow mode: it decides and explains, but never changes replicas. For
+# ready-made archetypes (custom metrics, queue workers, agent runners, advisor
+# mode) see examples/.
 apiVersion: scaling.autoscaler.io/v1alpha1
 kind: AgenticAutoscaler
 metadata:
@@ -9,4 +13,19 @@ metadata:
     app.kubernetes.io/created-by: agentic-autoscaler
   name: agenticautoscaler-sample
 spec:
-  # TODO(user): Add fields here
+  targetDeployment: my-service
+  prometheusURL: "http://prometheus-operated.monitoring:9090"
+  logSource:
+    type: loki
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{app="my-service"}'
+  minReplicas: 2
+  maxReplicas: 10
+  cooldownSeconds: 120
+  dryRun: true
+  hpaCoexistence:
+    mode: owner
+  aiProvider:
+    provider: anthropic
+    secretRef: ai-provider-secret

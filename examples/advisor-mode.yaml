@@ -1,0 +1,46 @@
+# Archetype: keep your existing HPA / KEDA as the only writer (advisor mode).
+#
+# The operator never writes spec.replicas. It publishes
+#   agentic_autoscaler_recommended_replicas{deployment_namespace="shop",deployment="cart"}
+# and your autoscaler scales on max(its own metrics, the recommendation).
+# If the operator stops, the CR is deleted or dryRun is set, the series
+# disappears and your HPA carries on with CPU alone.
+#
+# Add ONE trigger to the ScaledObject you already have (threshold "1" makes the
+# desired replica count equal the recommendation):
+#
+#   triggers:
+#     - type: cpu                 # unchanged
+#       metricType: Utilization
+#       metadata: { value: "70" }
+#     - type: prometheus          # + the agent
+#       metadata:
+#         serverAddress: http://prometheus.monitoring:9090
+#         query: max(agentic_autoscaler_recommended_replicas{deployment_namespace="shop",deployment="cart"})
+#         threshold: "1"
+#         ignoreNullValues: "true"
+#
+# Plain HPA instead of KEDA: deploy/advisor/hpa-external-metric.yaml.
+apiVersion: scaling.autoscaler.io/v1alpha1
+kind: AgenticAutoscaler
+metadata:
+  name: cart-autoscaler
+  namespace: shop
+spec:
+  targetDeployment: cart
+  prometheusURL: "http://prometheus.monitoring:9090"
+  logSource:
+    type: loki
+    loki:
+      url: "http://loki.monitoring:3100"
+      query: '{namespace="shop", app="cart"}'
+  # Keep these inside your HPA/ScaledObject's own min/max.
+  minReplicas: 2
+  maxReplicas: 20
+  cooldownSeconds: 120
+  dryRun: false                # live, but it only publishes a metric
+  hpaCoexistence:
+    mode: advisor
+  aiProvider:
+    provider: anthropic
+    secretRef: ai-provider-secret
