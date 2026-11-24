@@ -95,6 +95,23 @@ func TestCooldownHold_KeepsWhatItBlocked(t *testing.T) {
 	}
 }
 
+// Seen live on kind: pinned at max during cooldown, the hold read "cooldown …
+// would have scaled to 10 replicas" from 10. The bound, not the cooldown, is
+// what stops it.
+func TestCooldownAtBound_ReportsBound(t *testing.T) {
+	spec := baseSpec()
+	now := time.Now()
+	e := newEnforcerWithClock(nil, now)
+	last := metav1.NewTime(now.Add(-time.Minute))
+	got, err := e.Enforce(context.Background(), spec, &last, from(20, scaleUp(26)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Action != "hold" || got.Guardrail != "replica-bounds" || strings.Contains(got.Reason, "would have scaled") {
+		t.Errorf("at max in cooldown: %+v", got)
+	}
+}
+
 func TestGateApproval(t *testing.T) {
 	spec := baseSpec()
 	spec.Policy.ApprovalAboveReplicas = 10

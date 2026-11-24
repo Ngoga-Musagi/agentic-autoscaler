@@ -36,6 +36,11 @@ import (
 	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/reasoning"
 )
 
+const (
+	actionScaleUp         = "scale-up"
+	guardrailMaxScaleStep = "max-scale-step"
+)
+
 // HPAReader fetches a HorizontalPodAutoscaler by namespace and name.
 // The Enforcer uses this read-only in "calibrated" coexistence mode.
 // Implementations must never modify or delete HPA objects.
@@ -80,12 +85,18 @@ func (e *Enforcer) Enforce(
 	decision reasoning.ScaleDecision,
 ) (reasoning.ScaleDecision, error) {
 	// Hold decisions carry no TargetReplicas — pass straight through.
-	if decision.Action == "hold" {
+	if decision.Action == reasoning.ActionHold {
 		return decision, nil
 	}
 
 	// Cooldown blocks all non-hold scale actions.
 	if e.cooldown.IsActive(lastScaleTime, spec.CooldownSeconds, e.now()) {
+		// Already pinned at a CR bound: say that, not "would have scaled to 10"
+		// from 10 — the cooldown is not what stops it.
+		clamped := e.clampToCRBounds(decision, spec.MinReplicas, spec.MaxReplicas)
+		if b := noOpAtBound(clamped); b.Action == reasoning.ActionHold {
+			return b, nil
+		}
 		log.Printf("INFO: policy: cooldown active (%ds window), converting %s to hold",
 			spec.CooldownSeconds, decision.Action)
 		return reasoning.HeldBy(decision, "cooldown",
@@ -120,7 +131,7 @@ func noOpAtBound(d reasoning.ScaleDecision) reasoning.ScaleDecision {
 		return d
 	}
 	limit := "fewest"
-	if d.Action == "scale-up" {
+	if d.Action == actionScaleUp {
 		limit = "most"
 	}
 	h := reasoning.HeldBy(d, "replica-bounds",
@@ -146,7 +157,7 @@ func capStep(decision reasoning.ScaleDecision, maxStep int32) reasoning.ScaleDec
 	default:
 		return decision
 	}
-	decision.Guardrail = "max-scale-step"
+	decision.Guardrail = guardrailMaxScaleStep
 	decision.Reason = fmt.Sprintf("%s [capped by maxScaleStep %d: wanted %d, applying %d → %d]",
 		decision.Reason, maxStep, wanted, cur, decision.TargetReplicas)
 	log.Printf("INFO: policy: maxScaleStep %d capped targetReplicas %d → %d", maxStep, wanted, decision.TargetReplicas)
@@ -161,9 +172,11 @@ const ApprovalAnnotation = "agentic-autoscaler.io/approved-replicas"
 // spec.policy.approvalAboveReplicas unless approved (the parsed
 // ApprovalAnnotation, 0 when absent) covers it. It reports whether the
 // decision is now pending approval. Scale-downs and holds pass through.
-func GateApproval(spec v1alpha1.AgenticAutoscalerSpec, approved int32, d reasoning.ScaleDecision) (reasoning.ScaleDecision, bool) {
+func GateApproval(
+	spec v1alpha1.AgenticAutoscalerSpec, approved int32, d reasoning.ScaleDecision,
+) (reasoning.ScaleDecision, bool) {
 	limit := spec.Policy.ApprovalAboveReplicas
-	if limit <= 0 || d.Action != "scale-up" || d.TargetReplicas <= limit || approved >= d.TargetReplicas {
+	if limit <= 0 || d.Action != actionScaleUp || d.TargetReplicas <= limit || approved >= d.TargetReplicas {
 		return d, false
 	}
 	return reasoning.HeldBy(d, "approval-required", fmt.Sprintf(

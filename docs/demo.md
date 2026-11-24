@@ -91,14 +91,16 @@ One run each, on the dev `kind` cluster, with the reasoning on the rule engine
 
 | Scenario | Observed |
 |---|---|
-| checkout storm | p99 read from `shop_request_seconds` via the CR; scaled **2 → 3 → 5 → 8 → 10** in ~3.5 min, then logged "scale-up 10 → 10" while pinned at the max (fixed on this branch, see below; unit-tested, not yet re-run live), **10 → 3** after the 2-min quiet window |
+| checkout storm | p99 read from `shop_request_seconds` via the CR; scaled **2 → 3 → 5 → 8 → 10** in ~3.5 min, **10 → 3** after the 2-min quiet window. Re-run 2026-11-24: pinned at the max, each decision is a `replica-bounds` hold ("held: already at 10 replicas, the most this policy allows") instead of "scale-up 10 → 10" |
 | agent backlog, config only (no `spec.backlog`/`spec.agentic`) | the unchanged rules scaled **2 → 3 → 5** on `worker pool saturated` + task p99 > 2 s, then **5 → 3** |
 | agent 429 storm (quota squeezed to 4 calls/s) | 77–83 % of LLM calls rejected; **held for 6 min** at 3 runners, each decision recording `guardrail: llm-rate-limit` and the scale-up it blocked (to 5) |
 | agent token budget exhausted | **held for 4 min**, `guardrail: token-budget`, reason naming the blocked scale-up (to 4–6) |
 | agent backlog, budget restored | backlog rule scaled **3 → 4 → 6** while runner CPU stayed at **0.4–0.8 %** — a CPU HPA would not have moved |
 | `reset-all` | all three services back to baseline (agent-runner 6 → 3) |
 
-The run also surfaced (and the branch fixes) two existing issues: a service
+The runs also surfaced (and the branch fixes) three existing issues: a service
 pinned at `maxReplicas` logged "scale-up 10 → 10" every cycle (now an explained
-`replica-bounds` hold), and the scale-down reason always said "15+ minutes" even
-with a 2-minute window (now it states the configured window).
+`replica-bounds` hold, confirmed live), a cooldown at the max said "would have
+scaled to 10 replicas" from 10 (now reported as the bound), and the scale-down
+reason always said "15+ minutes" even with a 2-minute window (now it states the
+configured window).
