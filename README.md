@@ -43,7 +43,7 @@ overstated:
 | Prometheus + Loki signal collection → `SystemSnapshot` | Implemented · Tested |
 | Typed signal fusion + log-pattern matching → `FusedSignal` | Implemented · Tested |
 | Rule-based reasoning agent (offline, deterministic) | Implemented · Tested |
-| Cloud LLM providers (Anthropic, OpenAI Chat Completions) | Implemented · Tested |
+| Cloud LLM providers (Anthropic, OpenAI Chat Completions) | Implemented · Tested · Observed (Anthropic, multi-service demo — see [docs/demo.md](docs/demo.md)) |
 | Self-hosted Ollama provider | Implemented · Tested |
 | Fail-safe degradation (AI error → rules → `hold`) | Implemented · Tested |
 | Policy: min/max bounds + cooldown enforcement | Implemented · Tested |

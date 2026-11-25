@@ -104,3 +104,26 @@ pinned at `maxReplicas` logged "scale-up 10 → 10" every cycle (now an explaine
 scaled to 10 replicas" from 10 (now reported as the bound), and the scale-down
 reason always said "15+ minutes" even with a 2-minute window (now it states the
 configured window).
+
+## What was observed on kind (2026-11-25, Claude reasoning)
+
+Same scenarios, same CRs, with `AI_PROVIDER=anthropic` (`claude-sonnet-4-6`).
+91 decisions came from the model, none fell back to the rules. n=1 — a
+demonstration, not a benchmark. Reasons are quoted from the decision log.
+
+| Scenario | Observed |
+|---|---|
+| checkout storm | scaled **2 → 5 → 9 → 10** in ~2.3 min (the rules took ~6 min in 1-2-3 steps). At the max it held and said *why more pods would not help*: "CPU is only 0.1 % … suggesting the bottleneck is an external dependency or connection pool config". **10 → 2** in one step after the storm |
+| payment-service errors (restraint) | **held at 3 for 5 min** at 24–26 % errors: "errors are likely application-level (e.g., bad requests or upstream dependency failures) rather than capacity-related". The rule engine scales here (rule 3) |
+| agent 429 storm | **held at 2 for 4 min** with 74–75 % of LLM calls rejected: "additional replicas would not relieve the bottleneck". The model held on its own, so the deterministic `llm-rate-limit` guardrail (the backstop) had nothing to override |
+| agent backlog surge | scaled **2 → 6 → 9 → 11**, then — **with the surge still running** — **11 → 2** ("near-zero queue depth … scaling down to 2 replicas is sufficient for 38 rps"), and back up **2 → 6 → 9**. See below |
+| `reset-all` | all services back to baseline |
+
+**Known issue — scale-down flapping on the backlog.** Once 11 runners had
+drained the queue, the model read the empty queue as over-provisioning and
+dropped to the minimum, although 2 runners carry ~16 tasks/s of the 40/s
+arriving; the queue refilled and it scaled up again. The model sees queue
+depth but not per-replica capacity, and nothing limited the size of a
+scale-down. Until this is fixed, set `spec.policy.maxScaleStep` on backlog
+workloads (it caps both directions) and present the backlog scenario on the
+rule engine, where rule 5 does not scale down while the backlog needs capacity.
