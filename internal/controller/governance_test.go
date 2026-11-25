@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/policy"
+	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/reasoning"
 )
 
 // replicasOf reads spec.replicas of the "my-service" Deployment the tests target.
@@ -125,5 +126,37 @@ func TestReconcile_ConfidenceFloorFallsBackToRules(t *testing.T) {
 	got := getAA(t, rec, "floor")
 	if got.Status.LastGuardrail != "min-confidence" || !strings.Contains(got.Status.LastDecisionReason, "below the 0.70 floor") {
 		t.Errorf("status must explain the fallback: %q / %q", got.Status.LastGuardrail, got.Status.LastDecisionReason)
+	}
+}
+
+// A scale-up records status.lastScaleUpTime, and a scale-down inside
+// spec.policy.scaleDownStabilizationSeconds of it is held (the kind 11 → 2 flap).
+func TestReconcile_ScaleDownStabilization(t *testing.T) {
+	s := reconcilerScheme(t)
+	aa := makeAA("stable", "default", "my-service")
+	aa.Spec.CooldownSeconds = 0
+	aa.Spec.Policy.ScaleDownStabilizationSeconds = 300
+	rec, _ := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 3)}, scaleUpTo(8))
+	ctx := context.Background()
+
+	if _, err := rec.Reconcile(ctx, reconcileRequest("default", "stable")); err != nil {
+		t.Fatal(err)
+	}
+	if got := getAA(t, rec, "stable"); replicasOf(t, rec) != 8 || got.Status.LastScaleUpTime == nil {
+		t.Fatalf("scale-up must apply and record lastScaleUpTime: replicas %d, %+v", replicasOf(t, rec), got.Status)
+	}
+
+	down := scaleUpTo(2)
+	down.Action = "scale-down"
+	down.Reason = "queue is empty"
+	rec.NewAgent = func(_ reasoning.Config) reasoning.Agent { return &fixedAgent{decision: down} }
+	if _, err := rec.Reconcile(ctx, reconcileRequest("default", "stable")); err != nil {
+		t.Fatal(err)
+	}
+	got := getAA(t, rec, "stable")
+	if r := replicasOf(t, rec); r != 8 || got.Status.LastGuardrail != "scale-down-stabilization" ||
+		!strings.Contains(got.Status.LastDecisionReason, "would have scaled to 2") {
+		t.Errorf("scale-down inside the window must hold: replicas %d, %q / %q",
+			r, got.Status.LastGuardrail, got.Status.LastDecisionReason)
 	}
 }

@@ -38,6 +38,8 @@ spec:
   minReplicas: 1
   maxReplicas: 40
   cooldownSeconds: 90
+  policy:
+    scaleDownStabilizationSeconds: 300   # a drained queue is not spare capacity
   dryRun: true
   hpaCoexistence:
     mode: advisor

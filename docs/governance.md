@@ -14,6 +14,7 @@ signals → fusion → reasoning (rules | LLM)
         → workload guards         spec.agentic                      (429 / token budget)
         → pause                   agentic-autoscaler.io/pause, PAUSE_ALL
         → policy.Enforce          cooldown → min/max → HPA bounds → maxScaleStep → at-bound hold
+        → stabilization           spec.policy.scaleDownStabilizationSeconds
         → approval gate           spec.policy.approvalAboveReplicas
         → act                     patch replicas (owner) | publish metric (advisor) | nothing (dryRun)
 ```
@@ -32,6 +33,7 @@ decision keeps what it would have done in its reason, e.g.
 | Bounds | `minReplicas`, `maxReplicas` | every decision clamped; a clamp to the current count becomes an explained hold |
 | Cooldown | `cooldownSeconds` | no scale action inside the window |
 | Step cap | `spec.policy.maxScaleStep: 3` | one decision moves at most ±3 replicas |
+| Scale-down stabilization | `spec.policy.scaleDownStabilizationSeconds: 300` | no scale-down within 300 s of the last scale-up (like the HPA's window). A damper, not a floor: it delays a scale-down that reads a just-drained queue as spare capacity, but the scale-down still applies once the window passes |
 | Confidence floor | `spec.policy.minConfidence: 70` | an LLM decision below 0.70 is discarded; the rule engine decides |
 | Approval gate | `spec.policy.approvalAboveReplicas: 15` | scale-ups past 15 wait in `status.pendingApproval` |
 | Rate-limit hold | `spec.agentic.llmRateLimitQuery` (+ `rateLimitHoldPercent`, default 20) | scale-ups held while the LLM provider rejects ≥ 20 % of calls |

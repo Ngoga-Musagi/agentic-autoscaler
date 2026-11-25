@@ -134,6 +134,10 @@ func (in *AgenticAutoscalerStatus) DeepCopyInto(out *AgenticAutoscalerStatus) {
 		in, out := &in.LastScaleTime, &out.LastScaleTime
 		*out = (*in).DeepCopy()
 	}
+	if in.LastScaleUpTime != nil {
+		in, out := &in.LastScaleUpTime, &out.LastScaleUpTime
+		*out = (*in).DeepCopy()
+	}
 	if in.PendingApproval != nil {
 		in, out := &in.PendingApproval, &out.PendingApproval
 		*out = new(PendingApproval)

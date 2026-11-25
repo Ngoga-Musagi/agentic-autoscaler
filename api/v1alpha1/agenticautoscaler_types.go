@@ -262,6 +262,17 @@ type PolicyConfig struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	ApprovalAboveReplicas int32 `json:"approvalAboveReplicas,omitempty"`
+
+	// ScaleDownStabilizationSeconds holds any scale-down for this long after
+	// the last scale-up, like the HPA's scale-down stabilization window, so a
+	// queue the new replicas just drained is not read as spare capacity right
+	// away. It delays such a scale-down; it does not bound it — once the window
+	// passes, the decision applies (pair it with maxScaleStep). It never blocks
+	// a scale-down to a lowered maxReplicas. 0 (the default) is off.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=3600
+	ScaleDownStabilizationSeconds int32 `json:"scaleDownStabilizationSeconds,omitempty"`
 }
 
 // PendingApproval is a scale-up held by spec.policy.approvalAboveReplicas.
@@ -352,7 +363,8 @@ type AgenticAutoscalerSpec struct {
 	Agentic AgenticConfig `json:"agentic,omitempty"`
 
 	// Policy adds governance guardrails: a per-decision step cap, a confidence
-	// floor for AI decisions, and an approval gate for large scale-ups.
+	// floor for AI decisions, an approval gate for large scale-ups, and a
+	// scale-down stabilization window.
 	// +optional
 	Policy PolicyConfig `json:"policy,omitempty"`
 }
@@ -366,6 +378,12 @@ type AgenticAutoscalerStatus struct {
 	// LastScaleTime is the timestamp of the most recent live scale action.
 	// +optional
 	LastScaleTime *metav1.Time `json:"lastScaleTime,omitempty"`
+
+	// LastScaleUpTime is when replicas (or, in advisor mode, the
+	// recommendation) last went up. spec.policy.scaleDownStabilizationSeconds
+	// counts from here.
+	// +optional
+	LastScaleUpTime *metav1.Time `json:"lastScaleUpTime,omitempty"`
 
 	// LastDecisionReason is the human-readable explanation of the last scaling decision.
 	// +optional

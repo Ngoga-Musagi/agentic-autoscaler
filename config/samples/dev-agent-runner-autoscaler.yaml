@@ -66,6 +66,8 @@ spec:
   minReplicas: 2
   maxReplicas: 12
   cooldownSeconds: 60
+  policy:
+    scaleDownStabilizationSeconds: 180   # a drained queue is not spare capacity
   detection:
     scaleDownQuietWindowMinutes: 2   # demo: show scale-down within minutes
 

@@ -253,18 +253,7 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	aa.Status.ConsecutivePatternWindows = consecutiveWindows
 	// Surface any custom-pattern compile failures (nil clears stale warnings).
 	aa.Status.LogPatternWarnings = patternWarnings
-	if didScale {
-		aa.Status.LastScaleTime = decision.Timestamp
-		aa.Status.CurrentReplicas = decision.TargetReplicas
-	} else {
-		aa.Status.CurrentReplicas = currentReplicas
-	}
-	// A changed recommendation starts the cooldown exactly like a live scale, so
-	// the advisor cannot flap the consuming HPA faster than owner mode could.
-	if advised {
-		now := metav1.Now()
-		aa.Status.LastScaleTime = &now
-	}
+	recordScaleTimes(&aa.Status, decision, currentReplicas, didScale, advised)
 	if err := r.Status().Patch(ctx, &aa, statusPatch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("status patch: %w", err)
 	}
@@ -464,7 +453,8 @@ func approvedReplicas(aa *scalingv1alpha1.AgenticAutoscaler) int32 {
 
 // govern applies the human and policy controls, in order: a pause (CR or
 // Deployment annotation, or the global kill switch) wins over any reasoning;
-// then policy.Enforce (cooldown, bounds, HPA, step cap); then the approval
+// then policy.Enforce (cooldown, bounds, HPA, step cap); then the scale-down
+// stabilization window; then the approval
 // gate, whose approval lives in a CR annotation. It returns the governed
 // decision and, when the approval gate held it, the scale-up awaiting approval.
 func (r *AgenticAutoscalerReconciler) govern(
@@ -480,6 +470,7 @@ func (r *AgenticAutoscalerReconciler) govern(
 	if d.Guardrail == "cooldown" {
 		observability.RecordCooldownSkip(aa.Spec.TargetDeployment)
 	}
+	d = policy.StabilizeScaleDown(aa.Spec, aa.Status.LastScaleUpTime, time.Now(), d)
 	preApproval := d
 	d, pending := policy.GateApproval(aa.Spec, approvedReplicas(aa), d)
 	if d.Guardrail != "" {
@@ -489,6 +480,27 @@ func (r *AgenticAutoscalerReconciler) govern(
 		return d, &preApproval, nil
 	}
 	return d, nil, nil
+}
+
+// recordScaleTimes updates the replica count and the timestamps the cooldown
+// and the scale-down stabilization window count from.
+func recordScaleTimes(
+	st *scalingv1alpha1.AgenticAutoscalerStatus, d reasoning.ScaleDecision, current int32, didScale, advised bool,
+) {
+	st.CurrentReplicas = current
+	if didScale {
+		st.LastScaleTime = d.Timestamp
+		st.CurrentReplicas = d.TargetReplicas
+	}
+	// A changed recommendation starts the cooldown exactly like a live scale, so
+	// the advisor cannot flap the consuming HPA faster than owner mode could.
+	if advised {
+		now := metav1.Now()
+		st.LastScaleTime = &now
+	}
+	if (didScale || advised) && d.Action == "scale-up" {
+		st.LastScaleUpTime = st.LastScaleTime
+	}
 }
 
 // pendingApproval keeps status.pendingApproval in step with the gate: set (or

@@ -369,7 +369,8 @@ spec:
               policy:
                 description: |-
                   Policy adds governance guardrails: a per-decision step cap, a confidence
-                  floor for AI decisions, and an approval gate for large scale-ups.
+                  floor for AI decisions, an approval gate for large scale-ups, and a
+                  scale-down stabilization window.
                 properties:
                   approvalAboveReplicas:
                     description: |-
@@ -395,6 +396,18 @@ spec:
                       engine decides instead; the reason records why. 0 (the default) is off.
                     format: int32
                     maximum: 100
+                    minimum: 0
+                    type: integer
+                  scaleDownStabilizationSeconds:
+                    description: |-
+                      ScaleDownStabilizationSeconds holds any scale-down for this long after
+                      the last scale-up, like the HPA's scale-down stabilization window, so a
+                      queue the new replicas just drained is not read as spare capacity right
+                      away. It delays such a scale-down; it does not bound it — once the window
+                      passes, the decision applies (pair it with maxScaleStep). It never blocks
+                      a scale-down to a lowered maxReplicas. 0 (the default) is off.
+                    format: int32
+                    maximum: 3600
                     minimum: 0
                     type: integer
                 type: object
@@ -460,6 +473,13 @@ spec:
               lastScaleTime:
                 description: LastScaleTime is the timestamp of the most recent live
                   scale action.
+                format: date-time
+                type: string
+              lastScaleUpTime:
+                description: |-
+                  LastScaleUpTime is when replicas (or, in advisor mode, the
+                  recommendation) last went up. spec.policy.scaleDownStabilizationSeconds
+                  counts from here.
                 format: date-time
                 type: string
               logPatternWarnings:
