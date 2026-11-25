@@ -22,7 +22,7 @@ func main() {
 	// on the PromQL text and return values that paint an "overloaded" picture.
 	mux.HandleFunc("/api/v1/query", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
-		value := "0"
+		var value string
 		switch {
 		case strings.Contains(q, "histogram_quantile"):
 			value = "2.5" // p99 latency in SECONDS → 2500 ms (> 2000 ms rule threshold)
@@ -48,7 +48,8 @@ func main() {
 		log.Printf("LOKI query=%q -> 1 log line", truncate(r.URL.Query().Get("query"), 40))
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w,
-			`{"status":"success","data":{"resultType":"streams","result":[{"stream":{"app":"payment-service","level":"error"},"values":[[%q,%q]]}]}}`,
+			`{"status":"success","data":{"resultType":"streams","result":[`+
+				`{"stream":{"app":"payment-service","level":"error"},"values":[[%q,%q]]}]}}`,
 			ts, line)
 	})
 

@@ -99,7 +99,7 @@ func TestReconcile_LLMScaleUpHeldByProviderRateLimit(t *testing.T) {
 	aa.Spec.Agentic.LLMRateLimitQuery = `100 * sum(rate(agent_llm_calls_total{outcome="rate_limited"}[2m]))`
 	llm := reasoning.ScaleDecision{Action: "scale-up", TargetReplicas: 9, Confidence: 0.8,
 		Provider: "anthropic", Reason: "tasks are queueing", Timestamp: newTimestamp(time.Now())}
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("agent-runner", "default", 3)}, llm)
+	rec := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("agent-runner", "default", 3)}, llm)
 	limited := 45.0
 	rec.SignalCollector = &snapshotSignalCollector{snap: signals.SystemSnapshot{
 		Metrics: signals.MetricSnapshot{LLMRateLimitedPct: &limited},

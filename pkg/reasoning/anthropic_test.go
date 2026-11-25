@@ -65,7 +65,8 @@ func neutralSignal() fusion.FusedSignal {
 // ---- successful response ---------------------------------------------------
 
 func TestAnthropicAgent_SuccessfulResponse_ParsedCorrectly(t *testing.T) {
-	decisionJSON := `{"action":"scale-up","targetReplicas":8,"confidence":0.87,"reason":"Connection pool exhausted with high latency"}`
+	decisionJSON := `{"action":"scale-up","targetReplicas":8,"confidence":0.87,` +
+		`"reason":"Connection pool exhausted with high latency"}`
 
 	var capturedAPIKey, capturedVersion, capturedBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,8 +85,8 @@ func TestAnthropicAgent_SuccessfulResponse_ParsedCorrectly(t *testing.T) {
 	}
 
 	// Decision fields
-	if got.Action != "scale-up" {
-		t.Errorf("Action: want %q, got %q", "scale-up", got.Action)
+	if got.Action != actionScaleUp {
+		t.Errorf("Action: want %q, got %q", actionScaleUp, got.Action)
 	}
 	if got.TargetReplicas != 8 {
 		t.Errorf("TargetReplicas: want 8, got %d", got.TargetReplicas)
@@ -147,8 +148,8 @@ func TestAnthropicAgent_RetryOn429_ThirdAttemptSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if got.Action != "hold" {
-		t.Errorf("Action: want %q, got %q (wrong attempt succeeded)", "hold", got.Action)
+	if got.Action != ActionHold {
+		t.Errorf("Action: want %q, got %q (wrong attempt succeeded)", ActionHold, got.Action)
 	}
 	if n := attempts.Load(); n != 3 {
 		t.Errorf("expected 3 total requests (1 initial + 2 retries), got %d", n)
@@ -177,8 +178,8 @@ func TestAnthropicAgent_RetryOn500_ThirdAttemptSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if got.Action != "scale-down" {
-		t.Errorf("Action: want %q, got %q", "scale-down", got.Action)
+	if got.Action != actionScaleDown {
+		t.Errorf("Action: want %q, got %q", actionScaleDown, got.Action)
 	}
 	if n := attempts.Load(); n != 3 {
 		t.Errorf("expected 3 total requests, got %d", n)
@@ -203,8 +204,8 @@ func TestAnthropicAgent_AllRetriesExhausted_FallsBackToRuleBased(t *testing.T) {
 		t.Fatalf("Decide should not return an error (fallback), got: %v", err)
 	}
 	// Rule-based fallback on the neutral signal returns "hold".
-	if got.Action != "hold" {
-		t.Errorf("Action: want %q (rule-based fallback), got %q", "hold", got.Action)
+	if got.Action != ActionHold {
+		t.Errorf("Action: want %q (rule-based fallback), got %q", ActionHold, got.Action)
 	}
 	// Total attempts = 1 initial + 2 retries = 3.
 	if n := attempts.Load(); n != 3 {
@@ -218,7 +219,8 @@ func TestAnthropicAgent_Timeout_FallsBackToRuleBased(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Delay longer than the test context will allow.
 		time.Sleep(300 * time.Millisecond)
-		writeAnthropicJSON(w, validAnthropicEnvelope(`{"action":"scale-up","targetReplicas":8,"confidence":0.9,"reason":"test"}`))
+		writeAnthropicJSON(w, validAnthropicEnvelope(
+			`{"action":"scale-up","targetReplicas":8,"confidence":0.9,"reason":"test"}`))
 	}))
 	defer srv.Close()
 
@@ -232,8 +234,8 @@ func TestAnthropicAgent_Timeout_FallsBackToRuleBased(t *testing.T) {
 		t.Fatalf("Decide should not return an error (fallback), got: %v", err)
 	}
 	// Rule-based fallback on a neutral signal returns "hold".
-	if got.Action != "hold" {
-		t.Errorf("Action: want %q (rule-based fallback after timeout), got %q", "hold", got.Action)
+	if got.Action != ActionHold {
+		t.Errorf("Action: want %q (rule-based fallback after timeout), got %q", ActionHold, got.Action)
 	}
 }
 
@@ -250,8 +252,8 @@ func TestAnthropicAgent_InvalidJSONFromAI_FallsBackToRuleBased(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide should not error on invalid AI JSON (fallback), got: %v", err)
 	}
-	if got.Action != "hold" {
-		t.Errorf("Action: want %q (rule-based fallback), got %q", "hold", got.Action)
+	if got.Action != ActionHold {
+		t.Errorf("Action: want %q (rule-based fallback), got %q", ActionHold, got.Action)
 	}
 }
 
@@ -307,8 +309,8 @@ func TestAnthropicAgent_Non429ClientError_DoesNotRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide should not error (fallback), got: %v", err)
 	}
-	if got.Action != "hold" {
-		t.Errorf("Action: want %q (rule-based fallback), got %q", "hold", got.Action)
+	if got.Action != ActionHold {
+		t.Errorf("Action: want %q (rule-based fallback), got %q", ActionHold, got.Action)
 	}
 	// 400 must not be retried — exactly one request.
 	if n := attempts.Load(); n != 1 {

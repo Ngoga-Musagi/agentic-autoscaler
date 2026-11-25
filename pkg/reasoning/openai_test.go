@@ -74,11 +74,11 @@ func TestOpenAIAgent_SuccessfulResponse_ParsedCorrectly(t *testing.T) {
 		t.Fatalf("Decide: %v", err)
 	}
 
-	if got.Action != "scale-up" || got.TargetReplicas != 8 || got.Confidence != 0.87 {
+	if got.Action != actionScaleUp || got.TargetReplicas != 8 || got.Confidence != 0.87 {
 		t.Errorf("decision: want scale-up/8/0.87, got %s/%d/%.2f", got.Action, got.TargetReplicas, got.Confidence)
 	}
-	if got.Provider != "openai" {
-		t.Errorf("Provider: want %q, got %q", "openai", got.Provider)
+	if got.Provider != providerOpenAI {
+		t.Errorf("Provider: want %q, got %q", providerOpenAI, got.Provider)
 	}
 	if got.Timestamp == nil {
 		t.Error("Timestamp: want non-nil, got nil")
@@ -111,7 +111,7 @@ func TestOpenAIAgent_FencedJSON_Parsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if got.Provider != "openai" || got.Action != "hold" {
+	if got.Provider != providerOpenAI || got.Action != ActionHold {
 		t.Errorf("want openai hold, got %s %s", got.Provider, got.Action)
 	}
 }
@@ -133,7 +133,7 @@ func TestOpenAIAgent_RetryOn429_ThirdAttemptSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if got.Provider != "openai" {
+	if got.Provider != providerOpenAI {
 		t.Errorf("Provider: want openai after successful retry, got %q", got.Provider)
 	}
 	if n := attempts.Load(); n != 3 {
@@ -156,7 +156,7 @@ func TestOpenAIAgent_AllRetriesExhausted_FallsBackToRuleBased(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide should not return an error (fallback), got: %v", err)
 	}
-	if got.Action != "hold" || got.Provider == "openai" {
+	if got.Action != ActionHold || got.Provider == providerOpenAI {
 		t.Errorf("want rule-based hold, got %s from %q", got.Action, got.Provider)
 	}
 	if n := attempts.Load(); n != 3 {
@@ -176,8 +176,8 @@ func TestOpenAIAgent_Non429ClientError_DoesNotRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide should not error (fallback), got: %v", err)
 	}
-	if got.Action != "hold" {
-		t.Errorf("Action: want %q (rule-based fallback), got %q", "hold", got.Action)
+	if got.Action != ActionHold {
+		t.Errorf("Action: want %q (rule-based fallback), got %q", ActionHold, got.Action)
 	}
 	if n := attempts.Load(); n != 1 {
 		t.Errorf("401 should not be retried: expected 1 request, got %d", n)
@@ -208,7 +208,7 @@ func TestOpenAIAgent_InvalidResponses_FallBack(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Decide should not error (fallback), got: %v", err)
 			}
-			if got.Provider == "openai" {
+			if got.Provider == providerOpenAI {
 				t.Errorf("invalid response must fall back to rules, got openai decision %+v", got)
 			}
 		})

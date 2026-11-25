@@ -140,16 +140,24 @@ type Config struct {
 	TokenBudgetCapPct float64
 }
 
+// Provider names: the values of cfg.Provider / AI_PROVIDER and of
+// ScaleDecision.Provider.
+const (
+	providerAnthropic = "anthropic"
+	providerOpenAI    = "openai"
+	providerOllama    = "ollama"
+)
+
 // NewAgent returns the Agent implementation selected by cfg.Provider.
 // An unknown or empty Provider silently falls back to the rule-based agent
 // so that the operator degrades gracefully on misconfiguration.
 func NewAgent(cfg Config) Agent {
 	switch cfg.Provider {
-	case "anthropic":
+	case providerAnthropic:
 		return NewAnthropicAgent(cfg)
-	case "openai":
+	case providerOpenAI:
 		return NewOpenAIAgent(cfg)
-	case "ollama":
+	case providerOllama:
 		return NewOllamaAgent(cfg)
 	default:
 		return NewRuleBasedAgent(cfg)
@@ -172,13 +180,13 @@ func NewAgent(cfg Config) Agent {
 func NewAgentFromEnv(cfg Config) Agent {
 	cfg.Provider = envOrDefault("AI_PROVIDER", "rules")
 	switch cfg.Provider {
-	case "anthropic":
+	case providerAnthropic:
 		cfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
 		cfg.Model = os.Getenv("ANTHROPIC_MODEL")
-	case "openai":
+	case providerOpenAI:
 		cfg.APIKey = os.Getenv("OPENAI_API_KEY")
 		cfg.Model = os.Getenv("OPENAI_MODEL")
-	case "ollama":
+	case providerOllama:
 		cfg.BaseURL = os.Getenv("OLLAMA_BASE_URL")
 		cfg.Model = os.Getenv("OLLAMA_MODEL")
 	}
@@ -205,12 +213,6 @@ func scaleUpByFraction(current int32, fraction float64, max int32) int32 {
 		return target
 	}
 	return max
-}
-
-// scaleDownToBaseline returns MinReplicas, the "baseline" replica count that
-// the operator considers healthy when all signals have been green.
-func scaleDownToBaseline(min int32) int32 {
-	return min
 }
 
 // hold wraps HoldDecision to match the (ScaleDecision, error) return shape

@@ -44,7 +44,8 @@ func writeOllamaJSON(w http.ResponseWriter, v interface{}) {
 // ---- successful response ---------------------------------------------------
 
 func TestOllamaAgent_SuccessfulResponse_ParsedCorrectly(t *testing.T) {
-	decisionJSON := `{"action":"scale-up","targetReplicas":8,"confidence":0.82,"reason":"High latency detected on payment-service"}`
+	decisionJSON := `{"action":"scale-up","targetReplicas":8,"confidence":0.82,` +
+		`"reason":"High latency detected on payment-service"}`
 
 	var capturedBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -66,8 +67,8 @@ func TestOllamaAgent_SuccessfulResponse_ParsedCorrectly(t *testing.T) {
 		t.Fatalf("Decide: %v", err)
 	}
 
-	if got.Action != "scale-up" {
-		t.Errorf("Action: want %q, got %q", "scale-up", got.Action)
+	if got.Action != actionScaleUp {
+		t.Errorf("Action: want %q, got %q", actionScaleUp, got.Action)
 	}
 	if got.TargetReplicas != 8 {
 		t.Errorf("TargetReplicas: want 8, got %d", got.TargetReplicas)
@@ -115,8 +116,8 @@ func TestOllamaAgent_Timeout_FallsBackImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide should not return error (fallback), got: %v", err)
 	}
-	if got.Action != "hold" {
-		t.Errorf("Action: want %q (rule-based fallback after timeout), got %q", "hold", got.Action)
+	if got.Action != ActionHold {
+		t.Errorf("Action: want %q (rule-based fallback after timeout), got %q", ActionHold, got.Action)
 	}
 	// Ollama must NOT retry — exactly one request.
 	if attempts != 1 {
@@ -137,8 +138,8 @@ func TestOllamaAgent_InvalidJSONFromAI_FallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide should not error (fallback), got: %v", err)
 	}
-	if got.Action != "hold" {
-		t.Errorf("Action: want %q (rule-based fallback), got %q", "hold", got.Action)
+	if got.Action != ActionHold {
+		t.Errorf("Action: want %q (rule-based fallback), got %q", ActionHold, got.Action)
 	}
 }
 
@@ -153,8 +154,8 @@ func TestOllamaAgent_EmptyResponseField_FallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide should not error (fallback), got: %v", err)
 	}
-	if got.Action != "hold" {
-		t.Errorf("Action: want %q (rule-based fallback), got %q", "hold", got.Action)
+	if got.Action != ActionHold {
+		t.Errorf("Action: want %q (rule-based fallback), got %q", ActionHold, got.Action)
 	}
 }
 
@@ -206,8 +207,8 @@ func TestOllamaAgent_ServerError_FallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide should not error (fallback), got: %v", err)
 	}
-	if got.Action != "hold" {
-		t.Errorf("Action: want %q (rule-based fallback), got %q", "hold", got.Action)
+	if got.Action != ActionHold {
+		t.Errorf("Action: want %q (rule-based fallback), got %q", ActionHold, got.Action)
 	}
 }
 
@@ -283,7 +284,7 @@ func TestOllamaAgent_WrappedJSON_Parsed(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Decide: %v", err)
 			}
-			if got.Action != "scale-up" || got.TargetReplicas != 8 {
+			if got.Action != actionScaleUp || got.TargetReplicas != 8 {
 				t.Errorf("want scale-up/8 from wrapped JSON, got %s/%d", got.Action, got.TargetReplicas)
 			}
 		})

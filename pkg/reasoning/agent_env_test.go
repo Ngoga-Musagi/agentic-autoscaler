@@ -35,7 +35,7 @@ func TestNewAgentFromEnv_ExplicitRules(t *testing.T) {
 
 func TestNewAgentFromEnv_Anthropic_TypeAndCredentials(t *testing.T) {
 	t.Setenv("AI_PROVIDER", "ANTHROPIC_API_KEY")
-	t.Setenv("AI_PROVIDER", "anthropic")
+	t.Setenv("AI_PROVIDER", providerAnthropic)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
 	t.Setenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 
@@ -56,7 +56,7 @@ func TestNewAgentFromEnv_Anthropic_TypeAndCredentials(t *testing.T) {
 }
 
 func TestNewAgentFromEnv_OpenAI_TypeAndCredentials(t *testing.T) {
-	t.Setenv("AI_PROVIDER", "openai")
+	t.Setenv("AI_PROVIDER", providerOpenAI)
 	t.Setenv("OPENAI_API_KEY", "sk-openai-test-key")
 	t.Setenv("OPENAI_MODEL", "gpt-4o")
 
@@ -74,7 +74,7 @@ func TestNewAgentFromEnv_OpenAI_TypeAndCredentials(t *testing.T) {
 }
 
 func TestNewAgentFromEnv_Ollama_TypeAndEndpoint(t *testing.T) {
-	t.Setenv("AI_PROVIDER", "ollama")
+	t.Setenv("AI_PROVIDER", providerOllama)
 	t.Setenv("OLLAMA_BASE_URL", "http://ollama.ollama.svc.cluster.local:11434")
 	t.Setenv("OLLAMA_MODEL", "llama3:8b")
 
@@ -102,7 +102,7 @@ func TestNewAgentFromEnv_UnknownProvider_FallsBackToRuleBased(t *testing.T) {
 
 func TestNewAgentFromEnv_K8sFieldsPreserved(t *testing.T) {
 	// Verify that env var reading never clobbers the Kubernetes-sourced fields.
-	t.Setenv("AI_PROVIDER", "anthropic")
+	t.Setenv("AI_PROVIDER", providerAnthropic)
 	t.Setenv("ANTHROPIC_API_KEY", "key")
 
 	got := NewAgentFromEnv(baseK8sCfg)
@@ -121,7 +121,7 @@ func TestNewAgentFromEnv_K8sFieldsPreserved(t *testing.T) {
 func TestNewAgentFromEnv_MissingModelEnvVar_UsesDefault(t *testing.T) {
 	// When ANTHROPIC_MODEL is not set, the AnthropicAgent's modelName() should
 	// return anthropicDefaultModel rather than an empty string.
-	t.Setenv("AI_PROVIDER", "anthropic")
+	t.Setenv("AI_PROVIDER", providerAnthropic)
 	t.Setenv("ANTHROPIC_API_KEY", "key")
 	t.Setenv("ANTHROPIC_MODEL", "") // explicitly empty
 

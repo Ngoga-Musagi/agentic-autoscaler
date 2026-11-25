@@ -23,7 +23,10 @@ import (
 	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/fusion"
 )
 
-const actionScaleUp = "scale-up"
+const (
+	actionScaleUp   = "scale-up"
+	actionScaleDown = "scale-down"
+)
 
 // GuardWorkload enforces the agentic workload guardrails on a decision from
 // any provider, so an LLM cannot reason its way past them. It only ever turns

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/Ngoga-Musagi/agentic-autoscaler/pkg/reasoning"
 )
 
 func TestStabilizeScaleDown(t *testing.T) {
@@ -16,7 +18,7 @@ func TestStabilizeScaleDown(t *testing.T) {
 
 	// The kind regression: 11 → 2 one minute after scaling up to 11.
 	got := StabilizeScaleDown(spec, ago(time.Minute), now, from(11, scaleDown(2)))
-	if got.Action != "hold" || got.Guardrail != guardrailDownStabilization ||
+	if got.Action != reasoning.ActionHold || got.Guardrail != guardrailDownStabilization ||
 		!strings.Contains(got.Reason, "scaled up 1m0s ago; scale-downs wait 300s") ||
 		!strings.Contains(got.Reason, "would have scaled to 2 replicas") {
 		t.Errorf("scale-down inside the window must hold and say why: %+v", got)
@@ -35,12 +37,12 @@ func TestStabilizeScaleDown(t *testing.T) {
 	for name, c := range cases {
 		s := spec
 		s.Policy.ScaleDownStabilizationSeconds = c.window
-		if got := StabilizeScaleDown(s, c.last, now, from(c.cur, scaleDown(2))); got.Action != "scale-down" {
+		if got := StabilizeScaleDown(s, c.last, now, from(c.cur, scaleDown(2))); got.Action != actionScaleDown {
 			t.Errorf("%s: scale-down must pass: %+v", name, got)
 		}
 	}
 
-	if got := StabilizeScaleDown(spec, ago(time.Minute), now, from(4, scaleUp(8))); got.Action != "scale-up" {
+	if got := StabilizeScaleDown(spec, ago(time.Minute), now, from(4, scaleUp(8))); got.Action != actionScaleUp {
 		t.Errorf("scale-ups are never stabilized: %+v", got)
 	}
 }

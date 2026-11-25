@@ -40,10 +40,13 @@ const targetToken = "$TARGET"
 // (always 100%). The `>= 0` / `> 0` filters turn an idle service's NaN into an
 // empty result, which query() reports as 0.
 const (
-	defaultLatencyP99Query = `histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{service="$TARGET"}[2m]))) >= 0`
-	defaultErrorRateQuery  = `sum(rate(http_requests_total{service="$TARGET",status=~"5.."}[2m])) / (sum(rate(http_requests_total{service="$TARGET"}[2m])) > 0) * 100`
-	defaultCPUQuery        = `avg(rate(container_cpu_usage_seconds_total{pod=~"$TARGET-.*",container!="",container!="POD"}[2m])) * 100`
-	defaultRPSQuery        = `sum(rate(http_requests_total{service="$TARGET"}[2m]))`
+	defaultLatencyP99Query = `histogram_quantile(0.99, ` +
+		`sum by (le) (rate(http_request_duration_seconds_bucket{service="$TARGET"}[2m]))) >= 0`
+	defaultErrorRateQuery = `sum(rate(http_requests_total{service="$TARGET",status=~"5.."}[2m])) / ` +
+		`(sum(rate(http_requests_total{service="$TARGET"}[2m])) > 0) * 100`
+	defaultCPUQuery = `avg(rate(container_cpu_usage_seconds_total{` +
+		`pod=~"$TARGET-.*",container!="",container!="POD"}[2m])) * 100`
+	defaultRPSQuery = `sum(rate(http_requests_total{service="$TARGET"}[2m]))`
 )
 
 // Queries holds optional PromQL overrides. Any empty field falls back to the
@@ -99,7 +102,9 @@ func (c *PrometheusCollector) Collect(ctx context.Context, targetDeployment stri
 // returns a MetricSnapshot. An empty result from Prometheus (no time-series
 // data yet) is treated as zero rather than an error, since new deployments may
 // not have metrics.
-func (c *PrometheusCollector) CollectWithQueries(ctx context.Context, targetDeployment string, q Queries) (MetricSnapshot, error) {
+func (c *PrometheusCollector) CollectWithQueries(
+	ctx context.Context, targetDeployment string, q Queries,
+) (MetricSnapshot, error) {
 	rq := q.resolve(targetDeployment)
 
 	latencySec, err := c.query(ctx, rq.LatencyP99)

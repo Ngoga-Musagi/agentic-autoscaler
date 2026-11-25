@@ -52,22 +52,28 @@ func makeSignal(m signals.MetricSnapshot, patternNames ...string) fusion.FusedSi
 	}
 }
 
+// Severity names as in pkg/fusion.DefaultPatterns.
+const (
+	sevCritical = "critical"
+	sevWarning  = "warning"
+)
+
 // severityAndScore returns the canonical severity string and score for a known
 // pattern name, matching DefaultPatterns in pkg/fusion.
 func severityAndScore(name string) (string, float64) {
 	switch name {
 	case "oom-killed":
-		return "critical", 0.9
+		return sevCritical, 0.9
 	case "connection-pool-exhausted":
-		return "critical", 0.8
+		return sevCritical, 0.8
 	case "db-connection-failed":
-		return "critical", 0.7
+		return sevCritical, 0.7
 	case "circuit-breaker-open":
-		return "warning", 0.6
+		return sevWarning, 0.6
 	case "upstream-timeout":
-		return "warning", 0.5
+		return sevWarning, 0.5
 	default:
-		return "warning", 0.5
+		return sevWarning, 0.5
 	}
 }
 
@@ -147,7 +153,7 @@ func TestRuleBasedAgent_Decide(t *testing.T) {
 				"connection-pool-exhausted",
 			),
 			setupAgent: func(a *RuleBasedAgent) { a.cfg.ConsecutivePatternWindows = 1 },
-			wantAction: "hold", // latency not high enough; no other rules match
+			wantAction: ActionHold, // latency not high enough; no other rules match
 		},
 
 		// --- Rule 3: error rate --------------------------------------------------
@@ -164,7 +170,7 @@ func TestRuleBasedAgent_Decide(t *testing.T) {
 			name:       "error rate exactly 10% → does not fire (must be strictly > 10)",
 			cfg:        baseConfig,
 			signal:     makeSignal(signals.MetricSnapshot{ErrorRatePct: 10}),
-			wantAction: "hold",
+			wantAction: ActionHold,
 		},
 
 		// --- Rule 4: circuit-breaker-open ----------------------------------------
@@ -203,7 +209,7 @@ func TestRuleBasedAgent_Decide(t *testing.T) {
 			setupAgent: func(a *RuleBasedAgent) {
 				a.cfg.CleanSince = cleanSince(5 * time.Minute)
 			},
-			wantAction: "hold",
+			wantAction: ActionHold,
 		},
 		{
 			name: "CPU ≥ 20%, quiet ≥ 15 min → hold (CPU too high)",
@@ -214,7 +220,7 @@ func TestRuleBasedAgent_Decide(t *testing.T) {
 			setupAgent: func(a *RuleBasedAgent) {
 				a.cfg.CleanSince = cleanSince(20 * time.Minute)
 			},
-			wantAction: "hold",
+			wantAction: ActionHold,
 		},
 		{
 			name: "already at min+1 replicas, 15 min quiet → hold (no-op scale-down)",
@@ -225,7 +231,7 @@ func TestRuleBasedAgent_Decide(t *testing.T) {
 			setupAgent: func(a *RuleBasedAgent) {
 				a.cfg.CleanSince = cleanSince(20 * time.Minute)
 			},
-			wantAction: "hold", // target would be 3, cur is 3 — nothing to do
+			wantAction: ActionHold, // target would be 3, cur is 3 — nothing to do
 		},
 
 		// --- Rule 6: default hold ------------------------------------------------
@@ -233,7 +239,7 @@ func TestRuleBasedAgent_Decide(t *testing.T) {
 			name:       "no conditions met → hold",
 			cfg:        baseConfig,
 			signal:     makeSignal(signals.MetricSnapshot{LatencyP99Ms: 200, CPUUtilPct: 50}),
-			wantAction: "hold",
+			wantAction: ActionHold,
 		},
 	}
 
@@ -287,7 +293,7 @@ func TestRuleBasedAgent_NilCleanSince_NeverScalesDown(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Decide: %v", err)
 		}
-		if got.Action == "scale-down" {
+		if got.Action == actionScaleDown {
 			t.Fatalf("reconcile %d: fresh agent with nil CleanSince must not scale down, got %q", i, got.Action)
 		}
 	}
@@ -358,9 +364,9 @@ func TestRuleBasedAgent_ConsecutiveWindowGate(t *testing.T) {
 		windows    int32
 		wantAction string
 	}{
-		{1, "hold"},
-		{2, "hold"},
-		{3, "scale-up"},
+		{1, ActionHold},
+		{2, ActionHold},
+		{3, actionScaleUp},
 	} {
 		cfg := baseConfig
 		cfg.ConsecutiveWindowThreshold = 3
@@ -373,7 +379,7 @@ func TestRuleBasedAgent_ConsecutiveWindowGate(t *testing.T) {
 			t.Errorf("windows=%d: Action want %q, got %q (reason %q)",
 				tc.windows, tc.wantAction, got.Action, got.Reason)
 		}
-		if tc.wantAction == "scale-up" && !strings.Contains(got.Reason, "across 3 consecutive windows") {
+		if tc.wantAction == actionScaleUp && !strings.Contains(got.Reason, "across 3 consecutive windows") {
 			t.Errorf("windows=%d: reason should name the gate, got %q", tc.windows, got.Reason)
 		}
 	}
@@ -391,7 +397,7 @@ func TestRuleBasedAgent_GapResetsGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if got.Action != "hold" {
+	if got.Action != ActionHold {
 		t.Errorf("after a gap the gate must not be met; want hold, got %q", got.Action)
 	}
 }
@@ -408,7 +414,7 @@ func TestRuleBasedAgent_OOMNotGatedByWindows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if got.Action != "scale-up" || got.Confidence != 0.95 {
+	if got.Action != actionScaleUp || got.Confidence != 0.95 {
 		t.Errorf("OOM must scale up immediately regardless of window gate; got action %q confidence %.2f",
 			got.Action, got.Confidence)
 	}
@@ -426,7 +432,7 @@ func TestRuleBasedAgent_DefaultThresholdOmitsWindowClaim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if got.Action != "scale-up" {
+	if got.Action != actionScaleUp {
 		t.Fatalf("want scale-up, got %q", got.Action)
 	}
 	if strings.Contains(got.Reason, "consecutive windows") {
@@ -444,14 +450,14 @@ func TestRuleBasedAgent_ConfigurableQuietWindow(t *testing.T) {
 	// Default window (15 min): 2 minutes of quiet is NOT enough.
 	cfg := baseConfig
 	cfg.CleanSince = cleanSince(2 * time.Minute)
-	if got, _ := newAgent(cfg).Decide(context.Background(), sig); got.Action == "scale-down" {
+	if got, _ := newAgent(cfg).Decide(context.Background(), sig); got.Action == actionScaleDown {
 		t.Errorf("default 15m window: 2min quiet must not scale down, got %q", got.Action)
 	}
 
 	// Short window (1 min): 2 minutes of quiet IS enough.
 	cfg.CleanWindow = 1 * time.Minute
 	got, _ := newAgent(cfg).Decide(context.Background(), sig)
-	if got.Action != "scale-down" {
+	if got.Action != actionScaleDown {
 		t.Errorf("1m window: 2min quiet should scale down, got %q", got.Action)
 	}
 }

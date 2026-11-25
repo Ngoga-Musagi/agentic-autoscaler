@@ -25,6 +25,13 @@ import (
 	scalingv1alpha1 "github.com/Ngoga-Musagi/agentic-autoscaler/api/v1alpha1"
 )
 
+// AI providers the onboarding form accepts (the CRD enum).
+const (
+	providerAnthropic = "anthropic"
+	providerOpenAI    = "openai"
+	providerOllama    = "ollama"
+)
+
 // Defaults applied to an onboarding request when the operator leaves a field
 // blank. They mirror the in-cluster service names the bootstrap stack installs
 // so the "happy path" form submits without the user filling every box.
@@ -33,7 +40,7 @@ const (
 	defaultGrafanaURL       = "http://kube-prometheus-stack-grafana.monitoring"
 	defaultGrafanaSecretRef = "grafana-api-secret"
 	defaultLogSourceType    = "loki"
-	defaultProvider         = "anthropic"
+	defaultProvider         = providerAnthropic
 	defaultHPAMode          = "owner"
 )
 
@@ -78,7 +85,7 @@ func (r *OnboardRequest) Normalize() {
 	if s.AIProvider.Provider == "" {
 		s.AIProvider.Provider = defaultProvider
 	}
-	if s.AIProvider.Provider != "ollama" && s.AIProvider.SecretRef == "" {
+	if s.AIProvider.Provider != providerOllama && s.AIProvider.SecretRef == "" {
 		s.AIProvider.SecretRef = defaultAISecretRef
 	}
 	if s.HPACoexistence.Mode == "" {
@@ -121,7 +128,7 @@ func (r *OnboardRequest) Validate() error {
 	}
 
 	switch s.AIProvider.Provider {
-	case "anthropic", "openai", "ollama":
+	case providerAnthropic, providerOpenAI, providerOllama:
 	default:
 		return fmt.Errorf("aiProvider.provider must be one of anthropic, openai, ollama")
 	}

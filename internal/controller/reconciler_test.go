@@ -97,7 +97,7 @@ func makeReconciler(
 	scheme *runtime.Scheme,
 	objs []runtime.Object,
 	decision reasoning.ScaleDecision,
-) (*AgenticAutoscalerReconciler, *fake.ClientBuilder) {
+) *AgenticAutoscalerReconciler {
 	t.Helper()
 
 	builder := fake.NewClientBuilder().
@@ -120,7 +120,7 @@ func makeReconciler(
 			return &fixedAgent{decision: decision}
 		},
 	}
-	return rec, builder
+	return rec
 }
 
 // ---- helpers ---------------------------------------------------------------
@@ -159,7 +159,7 @@ func TestReconcile_HoldDecision_StatusUpdated(t *testing.T) {
 	deploy := makeDeployment("my-service", "default", 5)
 
 	holdDecision := reasoning.HoldDecision("steady state, no action needed")
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, holdDecision)
+	rec := makeReconciler(t, s, []runtime.Object{aa, deploy}, holdDecision)
 
 	result, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler"))
 	if err != nil {
@@ -194,7 +194,7 @@ func TestReconcile_ScaleUpDecision_PatchesDeployment(t *testing.T) {
 		Reason:         "high load detected",
 		Timestamp:      ts,
 	}
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, scaleUp)
+	rec := makeReconciler(t, s, []runtime.Object{aa, deploy}, scaleUp)
 
 	_, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler"))
 	if err != nil {
@@ -236,7 +236,7 @@ func TestReconcile_DryRun_DoesNotPatchDeployment(t *testing.T) {
 		Reason:         "would scale up in dry-run",
 		Timestamp:      newTimestamp(time.Now()),
 	}
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, scaleUp)
+	rec := makeReconciler(t, s, []runtime.Object{aa, deploy}, scaleUp)
 
 	_, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler"))
 	if err != nil {
@@ -404,7 +404,7 @@ func TestReconcile_HPACoexistenceStatus_OwnerMode(t *testing.T) {
 	aa.Spec.HPACoexistence = scalingv1alpha1.HPACoexistence{Mode: "owner"}
 	deploy := makeDeployment("my-service", "default", 5)
 
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, reasoning.HoldDecision("hold"))
+	rec := makeReconciler(t, s, []runtime.Object{aa, deploy}, reasoning.HoldDecision("hold"))
 
 	_, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler"))
 	if err != nil {
@@ -424,7 +424,7 @@ func TestReconcile_RequeueAfterRespectsCooldownSeconds(t *testing.T) {
 	aa.Spec.CooldownSeconds = 120
 	deploy := makeDeployment("my-service", "default", 5)
 
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, reasoning.HoldDecision("hold"))
+	rec := makeReconciler(t, s, []runtime.Object{aa, deploy}, reasoning.HoldDecision("hold"))
 
 	result, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler"))
 	if err != nil {
@@ -440,7 +440,7 @@ func TestReconcile_ObservedGenerationUpdated(t *testing.T) {
 	aa := makeAA("autoscaler", "default", "my-service")
 	deploy := makeDeployment("my-service", "default", 5)
 
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, reasoning.HoldDecision("hold"))
+	rec := makeReconciler(t, s, []runtime.Object{aa, deploy}, reasoning.HoldDecision("hold"))
 
 	_, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler"))
 	if err != nil {
@@ -548,7 +548,7 @@ func TestReconcile_GrafanaNotCalledOnHold(t *testing.T) {
 	aa.Spec.DryRun = false
 	deploy := makeDeployment("api", "default", 3)
 
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, reasoning.HoldDecision("steady state"))
+	rec := makeReconciler(t, s, []runtime.Object{aa, deploy}, reasoning.HoldDecision("steady state"))
 	// Grafana is nil (not set in makeReconciler) — must not panic.
 
 	_, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler"))
@@ -564,7 +564,7 @@ func TestReconcile_DeploymentNamespaceFallsBackToCRNamespace(t *testing.T) {
 	aa.Spec.Namespace = ""
 	deploy := makeDeployment("api", "production", 4)
 
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, reasoning.HoldDecision("hold"))
+	rec := makeReconciler(t, s, []runtime.Object{aa, deploy}, reasoning.HoldDecision("hold"))
 
 	_, err := rec.Reconcile(context.Background(), reconcileRequest("production", "autoscaler"))
 	if err != nil {
@@ -597,7 +597,7 @@ func TestReconcile_EmptyNamespace_ScaleUp_PatchesDeployment(t *testing.T) {
 		Reason:         "high load detected",
 		Timestamp:      newTimestamp(time.Now()),
 	}
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, scaleUp)
+	rec := makeReconciler(t, s, []runtime.Object{aa, deploy}, scaleUp)
 
 	if _, err := rec.Reconcile(context.Background(), reconcileRequest("production", "autoscaler")); err != nil {
 		t.Fatalf("Reconcile: want nil with empty spec.namespace on scale-up, got %v", err)
@@ -629,7 +629,7 @@ func TestReconcile_CleanReconcile_SetsLastCleanSince(t *testing.T) {
 
 	// A pattern-free snapshot → fusion matches nothing → the controller starts
 	// the quiet-window timer.
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, reasoning.HoldDecision("hold"))
+	rec := makeReconciler(t, s, []runtime.Object{aa, deploy}, reasoning.HoldDecision("hold"))
 
 	if _, err := rec.Reconcile(context.Background(), reconcileRequest("default", "autoscaler")); err != nil {
 		t.Fatalf("Reconcile: %v", err)

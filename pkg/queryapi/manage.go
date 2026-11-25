@@ -376,7 +376,7 @@ func (s *Server) proxyLoad(w http.ResponseWriter, r *http.Request, path string) 
 		jsonError(w, "load generator unreachable: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)

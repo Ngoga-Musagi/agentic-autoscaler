@@ -62,9 +62,10 @@ func newTestServer(t *testing.T, cfg ConsoleConfig, objs ...client.Object) (*Ser
 	return &Server{k8sClient: c, namespace: "default", cfg: cfg}, c
 }
 
-func deployment(ns, name string, replicas int32) *appsv1.Deployment {
+// deployment builds a Deployment in the "production" namespace.
+func deployment(name string, replicas int32) *appsv1.Deployment {
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "production", Name: name},
 		Spec:       appsv1.DeploymentSpec{Replicas: i32(replicas)},
 	}
 }
@@ -109,8 +110,8 @@ func TestDeploymentsManagedFlag(t *testing.T) {
 		},
 	}
 	s, _ := newTestServer(t, ConsoleConfig{},
-		deployment("production", "payment-service", 3),
-		deployment("production", "orders", 1),
+		deployment("payment-service", 3),
+		deployment("orders", 1),
 		managedAA, hpa)
 
 	rec := doJSON(t, s.handleDeployments, http.MethodGet, "/api/deployments?namespace=production", "", nil)
@@ -135,7 +136,7 @@ func TestDeploymentsManagedFlag(t *testing.T) {
 }
 
 func TestCreateAutoscalerWriteDisabled(t *testing.T) {
-	s, _ := newTestServer(t, ConsoleConfig{WriteEnabled: false}, deployment("production", "payment-service", 3))
+	s, _ := newTestServer(t, ConsoleConfig{WriteEnabled: false}, deployment("payment-service", 3))
 	rec := doJSON(t, s.handleAutoscalers, http.MethodPost, "/api/autoscalers", "", validReq())
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("want 403, got %d: %s", rec.Code, rec.Body.String())
@@ -143,7 +144,7 @@ func TestCreateAutoscalerWriteDisabled(t *testing.T) {
 }
 
 func TestCreateAutoscalerBadToken(t *testing.T) {
-	s, _ := newTestServer(t, ConsoleConfig{WriteEnabled: true, AuthToken: "right"}, deployment("production", "payment-service", 3))
+	s, _ := newTestServer(t, ConsoleConfig{WriteEnabled: true, AuthToken: "right"}, deployment("payment-service", 3))
 	rec := doJSON(t, s.handleAutoscalers, http.MethodPost, "/api/autoscalers", "wrong", validReq())
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d: %s", rec.Code, rec.Body.String())
@@ -151,7 +152,7 @@ func TestCreateAutoscalerBadToken(t *testing.T) {
 }
 
 func TestCreateAutoscalerHappyPath(t *testing.T) {
-	s, c := newTestServer(t, ConsoleConfig{WriteEnabled: true, AuthToken: "tok"}, deployment("production", "payment-service", 3))
+	s, c := newTestServer(t, ConsoleConfig{WriteEnabled: true, AuthToken: "tok"}, deployment("payment-service", 3))
 	rec := doJSON(t, s.handleAutoscalers, http.MethodPost, "/api/autoscalers", "tok", validReq())
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
@@ -181,7 +182,7 @@ func TestCreateCalibratedExceedsHPA(t *testing.T) {
 			MinReplicas:    i32(3), MaxReplicas: 8,
 		},
 	}
-	s, _ := newTestServer(t, ConsoleConfig{WriteEnabled: true}, deployment("production", "payment-service", 3), hpa)
+	s, _ := newTestServer(t, ConsoleConfig{WriteEnabled: true}, deployment("payment-service", 3), hpa)
 
 	req := validReq()
 	req.Spec.MinReplicas = 3  // satisfies HPA min of 3

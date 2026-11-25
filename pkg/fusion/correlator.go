@@ -53,7 +53,9 @@ func Correlate(snapshot signals.SystemSnapshot) FusedSignal {
 func CorrelateWithPatterns(snapshot signals.SystemSnapshot, patterns []Pattern) FusedSignal {
 	counts := matchPatterns(snapshot.LogEntries, patterns)
 
-	var matched []PatternMatch
+	// nil (not an empty slice) when nothing matches: callers and the JSON audit
+	// record treat "no patterns" as absent.
+	var matched []PatternMatch //nolint:prealloc // see above
 	var maxScore float64
 	for _, p := range patterns {
 		count, ok := counts[p.Name]

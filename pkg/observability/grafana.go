@@ -130,7 +130,7 @@ func (g *GrafanaClient) PushAnnotation(ctx context.Context, r DecisionRecord) er
 			"deployment", r.Deployment)
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	// Drain to allow connection reuse.
 	_, _ = io.Copy(io.Discard, resp.Body)
 

@@ -69,7 +69,7 @@ func TestPolicyUnset_DecisionsUnchanged(t *testing.T) {
 // "scale-up 20 → 20" every cycle.
 func TestAtBound_NoOpBecomesExplainedHold(t *testing.T) {
 	got := enforce(t, 0, from(20, scaleUp(26)))
-	if got.Action != "hold" || got.Guardrail != "replica-bounds" ||
+	if got.Action != reasoning.ActionHold || got.Guardrail != "replica-bounds" ||
 		!strings.Contains(got.Reason, "already at 20 replicas, the most this policy allows") {
 		t.Errorf("at max: %+v", got)
 	}
@@ -89,7 +89,7 @@ func TestCooldownHold_KeepsWhatItBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Action != "hold" || got.Guardrail != "cooldown" || got.Provider != "anthropic" ||
+	if got.Action != reasoning.ActionHold || got.Guardrail != "cooldown" || got.Provider != "anthropic" ||
 		!strings.Contains(got.Reason, "would have scaled to 8 replicas") {
 		t.Errorf("cooldown hold must keep its context for the audit: %+v", got)
 	}
@@ -107,7 +107,8 @@ func TestCooldownAtBound_ReportsBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Action != "hold" || got.Guardrail != "replica-bounds" || strings.Contains(got.Reason, "would have scaled") {
+	if got.Action != reasoning.ActionHold || got.Guardrail != "replica-bounds" ||
+		strings.Contains(got.Reason, "would have scaled") {
 		t.Errorf("at max in cooldown: %+v", got)
 	}
 }
@@ -117,7 +118,7 @@ func TestGateApproval(t *testing.T) {
 	spec.Policy.ApprovalAboveReplicas = 10
 
 	held, pending := GateApproval(spec, 0, from(8, scaleUp(14)))
-	if !pending || held.Action != "hold" || held.Guardrail != "approval-required" ||
+	if !pending || held.Action != reasoning.ActionHold || held.Guardrail != "approval-required" ||
 		!strings.Contains(held.Reason, ApprovalAnnotation+"=14") {
 		t.Errorf("above threshold without approval: pending=%v %+v", pending, held)
 	}
@@ -127,7 +128,7 @@ func TestGateApproval(t *testing.T) {
 	if _, p := GateApproval(spec, 12, from(8, scaleUp(14))); !p {
 		t.Error("an approval below the target must not cover it")
 	}
-	if got, p := GateApproval(spec, 0, from(4, scaleUp(10))); p || got.Action != "scale-up" {
+	if got, p := GateApproval(spec, 0, from(4, scaleUp(10))); p || got.Action != actionScaleUp {
 		t.Errorf("at the threshold needs no approval: pending=%v %+v", p, got)
 	}
 	if _, p := GateApproval(spec, 0, from(14, scaleDown(4))); p {

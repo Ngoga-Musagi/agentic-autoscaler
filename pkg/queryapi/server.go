@@ -116,7 +116,7 @@ func (s *Server) Start(ctx context.Context) {
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Write(uiHTML)
+	_, _ = w.Write(uiHTML)
 }
 
 func (s *Server) handleDecisions(w http.ResponseWriter, r *http.Request) {
@@ -177,7 +177,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	answer, err := askAI(ctx, req.Question, ctx50)
 	if err != nil {
 		// Graceful degradation: return a structured summary without the AI.
-		answer = deterministicSummary(req.Question, ctx50)
+		answer = deterministicSummary(ctx50)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -262,7 +262,7 @@ When answering:
 	if err != nil {
 		return "", fmt.Errorf("anthropic request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -284,7 +284,7 @@ When answering:
 
 // deterministicSummary produces a structured plain-English answer without an
 // AI call. It is the fallback when the API key is absent or the call fails.
-func deterministicSummary(question string, records []observability.DecisionRecord) string {
+func deterministicSummary(records []observability.DecisionRecord) string {
 	if len(records) == 0 {
 		return "No decisions found in the audit log for the requested scope."
 	}

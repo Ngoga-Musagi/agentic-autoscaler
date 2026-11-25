@@ -47,7 +47,10 @@ const minRequeueInterval = 30 * time.Second
 
 // modeAdvisor is the hpaCoexistence mode in which the operator publishes a
 // recommendation metric instead of writing spec.replicas.
-const modeAdvisor = "advisor"
+const (
+	modeAdvisor = "advisor"
+	modeOwner   = "owner"
+)
 
 // AgenticAutoscalerReconciler reconciles a AgenticAutoscaler object.
 type AgenticAutoscalerReconciler struct {
@@ -293,7 +296,7 @@ func (r *AgenticAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 // hpaCoexistenceStatus derives the HPACoexistenceStatus field value from the spec.
 func hpaCoexistenceStatus(spec scalingv1alpha1.AgenticAutoscalerSpec) string {
 	switch spec.HPACoexistence.Mode {
-	case "owner", "calibrated", modeAdvisor:
+	case modeOwner, "calibrated", modeAdvisor:
 		return spec.HPACoexistence.Mode
 	default:
 		return ""

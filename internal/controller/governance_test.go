@@ -54,7 +54,7 @@ func TestReconcile_PauseForcesHold(t *testing.T) {
 			deploy.Annotations = map[string]string{}
 			pause(aa.Annotations, deploy.Annotations, t)
 
-			rec, _ := makeReconciler(t, s, []runtime.Object{aa, deploy}, scaleUpTo(8))
+			rec := makeReconciler(t, s, []runtime.Object{aa, deploy}, scaleUpTo(8))
 			if _, err := rec.Reconcile(context.Background(), reconcileRequest("default", "paused")); err != nil {
 				t.Fatal(err)
 			}
@@ -76,7 +76,7 @@ func TestReconcile_ApprovalGate(t *testing.T) {
 	aa := makeAA("gated", "default", "my-service")
 	aa.Spec.CooldownSeconds = 0
 	aa.Spec.Policy.ApprovalAboveReplicas = 6
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 3)}, scaleUpTo(9))
+	rec := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 3)}, scaleUpTo(9))
 	ctx := context.Background()
 
 	if _, err := rec.Reconcile(ctx, reconcileRequest("default", "gated")); err != nil {
@@ -114,7 +114,7 @@ func TestReconcile_ConfidenceFloorFallsBackToRules(t *testing.T) {
 	weak := scaleUpTo(12)
 	weak.Confidence = 0.3
 	weak.Provider = "anthropic"
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 3)}, weak)
+	rec := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 3)}, weak)
 
 	if _, err := rec.Reconcile(context.Background(), reconcileRequest("default", "floor")); err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestReconcile_ScaleDownStabilization(t *testing.T) {
 	aa := makeAA("stable", "default", "my-service")
 	aa.Spec.CooldownSeconds = 0
 	aa.Spec.Policy.ScaleDownStabilizationSeconds = 300
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 3)}, scaleUpTo(8))
+	rec := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 3)}, scaleUpTo(8))
 	ctx := context.Background()
 
 	if _, err := rec.Reconcile(ctx, reconcileRequest("default", "stable")); err != nil {

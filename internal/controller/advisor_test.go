@@ -88,7 +88,7 @@ func getAA(t *testing.T, rec *AgenticAutoscalerReconciler, name string) *scaling
 func TestReconcile_Advisor_PublishesMetricInsteadOfPatching(t *testing.T) {
 	s := reconcilerScheme(t)
 	aa := makeAdvisorAA("advisor-up")
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 3)}, scaleUpTo(8))
+	rec := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 3)}, scaleUpTo(8))
 
 	if _, err := rec.Reconcile(context.Background(), reconcileRequest("default", "advisor-up")); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -125,7 +125,7 @@ func TestReconcile_Advisor_HoldKeepsPreviousRecommendation(t *testing.T) {
 	s := reconcilerScheme(t)
 	aa := makeAdvisorAA("advisor-hold")
 	aa.Status.RecommendedReplicas = 6
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 6)},
+	rec := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 6)},
 		reasoning.HoldDecision("signals steady"))
 
 	if _, err := rec.Reconcile(context.Background(), reconcileRequest("default", "advisor-hold")); err != nil {
@@ -145,7 +145,7 @@ func TestReconcile_Advisor_HoldKeepsPreviousRecommendation(t *testing.T) {
 
 func TestReconcile_Advisor_FirstHoldStartsAtMinReplicas(t *testing.T) {
 	s := reconcilerScheme(t)
-	rec, _ := makeReconciler(t, s,
+	rec := makeReconciler(t, s,
 		[]runtime.Object{makeAdvisorAA("advisor-first"), makeDeployment("my-service", "default", 5)},
 		reasoning.HoldDecision("signals steady"))
 
@@ -162,7 +162,7 @@ func TestReconcile_Advisor_DryRunPublishesNothing(t *testing.T) {
 	s := reconcilerScheme(t)
 	aa := makeAdvisorAA("advisor-dry")
 	aa.Spec.DryRun = true
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 3)}, scaleUpTo(8))
+	rec := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 3)}, scaleUpTo(8))
 
 	if _, err := rec.Reconcile(context.Background(), reconcileRequest("default", "advisor-dry")); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -180,7 +180,7 @@ func TestReconcile_Advisor_DryRunPublishesNothing(t *testing.T) {
 func TestReconcile_Advisor_MetricClearedOnDeleteAndModeSwitch(t *testing.T) {
 	s := reconcilerScheme(t)
 	aa := makeAdvisorAA("advisor-gone")
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 3)}, scaleUpTo(5))
+	rec := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 3)}, scaleUpTo(5))
 	ctx := context.Background()
 
 	if _, err := rec.Reconcile(ctx, reconcileRequest("default", "advisor-gone")); err != nil {
@@ -241,7 +241,7 @@ func TestReconcile_Advisor_AnnotatesOnlyChangedRecommendations(t *testing.T) {
 	// The HPA is still holding 10 pods, so the agent keeps asking for 2.
 	scaleDown := reasoning.ScaleDecision{Action: "scale-down", TargetReplicas: 2, Confidence: 0.9,
 		Reason: "idle", Timestamp: newTimestamp(time.Now())}
-	rec, _ := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 10)}, scaleDown)
+	rec := makeReconciler(t, s, []runtime.Object{aa, makeDeployment("my-service", "default", 10)}, scaleDown)
 	rec.Grafana = observability.NewGrafanaClient(observability.GrafanaConfig{URL: grafana.URL})
 
 	for i := 0; i < 3; i++ {

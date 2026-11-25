@@ -19,7 +19,8 @@ func TestConfidenceFloor(t *testing.T) {
 	rules := NewRuleBasedAgent(baseConfig)
 	sig := makeSignal(signals.MetricSnapshot{ErrorRatePct: 25}) // rule 3 → scale-up to 7
 
-	weak := stubAgent{ScaleDecision{Action: "scale-up", TargetReplicas: 18, Confidence: 0.41, Provider: "anthropic"}}
+	weak := stubAgent{ScaleDecision{
+		Action: actionScaleUp, TargetReplicas: 18, Confidence: 0.41, Provider: providerAnthropic}}
 	got, err := WithConfidenceFloor(weak, rules, 0.7).Decide(context.Background(), sig)
 	if err != nil {
 		t.Fatal(err)
@@ -29,15 +30,16 @@ func TestConfidenceFloor(t *testing.T) {
 		t.Errorf("below the floor the rules must decide: %+v", got)
 	}
 
-	strong := stubAgent{ScaleDecision{Action: "scale-up", TargetReplicas: 9, Confidence: 0.9, Provider: "anthropic"}}
+	strong := stubAgent{ScaleDecision{
+		Action: actionScaleUp, TargetReplicas: 9, Confidence: 0.9, Provider: providerAnthropic}}
 	got, _ = WithConfidenceFloor(strong, rules, 0.7).Decide(context.Background(), sig)
 	if got.TargetReplicas != 9 || got.Guardrail != "" {
 		t.Errorf("at or above the floor the AI decision stands: %+v", got)
 	}
 
 	// The floor checks the model, not the rules (which fall back on themselves).
-	fallback := stubAgent{ScaleDecision{Action: "hold", Confidence: 0, Provider: "rule-based"}}
-	if got, _ := WithConfidenceFloor(fallback, rules, 0.7).Decide(context.Background(), sig); got.Action != "hold" {
+	fallback := stubAgent{ScaleDecision{Action: ActionHold, Confidence: 0, Provider: "rule-based"}}
+	if got, _ := WithConfidenceFloor(fallback, rules, 0.7).Decide(context.Background(), sig); got.Action != ActionHold {
 		t.Errorf("rule-based decisions pass through: %+v", got)
 	}
 }

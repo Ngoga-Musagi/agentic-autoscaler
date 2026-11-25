@@ -85,11 +85,18 @@ func TestCollectWithQueriesSendsOverride(t *testing.T) {
 // reaches Prometheus with the target substituted, and each result lands in the
 // right field (latency converted from seconds to ms).
 func TestCollectWithQueries_NonDefaultNamesProduceSnapshot(t *testing.T) {
+	const (
+		latQ = `histogram_quantile(0.99, sum by (le) (rate(shop_request_seconds_bucket{app="$TARGET"}[2m]))) >= 0`
+		errQ = `sum(rate(shop_requests_total{app="$TARGET",code=~"5.."}[2m])) / ` +
+			`(sum(rate(shop_requests_total{app="$TARGET"}[2m])) > 0) * 100`
+		cpuQ = `avg(rate(container_cpu_usage_seconds_total{pod=~"$TARGET-.*"}[2m])) * 100`
+	)
+	expand := func(q string) string { return strings.ReplaceAll(q, "$TARGET", "checkout") }
 	answers := map[string]string{
-		`histogram_quantile(0.99, sum by (le) (rate(shop_request_seconds_bucket{app="checkout"}[2m]))) >= 0`:                              "2.75",
-		`sum(rate(shop_requests_total{app="checkout",code=~"5.."}[2m])) / (sum(rate(shop_requests_total{app="checkout"}[2m])) > 0) * 100`: "4",
-		`avg(rate(container_cpu_usage_seconds_total{pod=~"checkout-.*"}[2m])) * 100`:                                                      "3.5",
-		`sum(rate(shop_requests_total{app="checkout"}[2m]))`:                                                                              "120",
+		expand(latQ): "2.75",
+		expand(errQ): "4",
+		expand(cpuQ): "3.5",
+		`sum(rate(shop_requests_total{app="checkout"}[2m]))`: "120",
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		v, ok := answers[r.URL.Query().Get("query")]
@@ -97,14 +104,15 @@ func TestCollectWithQueries_NonDefaultNamesProduceSnapshot(t *testing.T) {
 			t.Errorf("unexpected query: %s", r.URL.Query().Get("query"))
 			v = "0"
 		}
-		fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1,%q]}]}}`, v)
+		fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector",`+
+			`"result":[{"metric":{},"value":[1,%q]}]}}`, v)
 	}))
 	defer srv.Close()
 
 	got, err := NewPrometheusCollector(srv.URL).CollectWithQueries(context.Background(), "checkout", Queries{
-		LatencyP99:        `histogram_quantile(0.99, sum by (le) (rate(shop_request_seconds_bucket{app="$TARGET"}[2m]))) >= 0`,
-		ErrorRate:         `sum(rate(shop_requests_total{app="$TARGET",code=~"5.."}[2m])) / (sum(rate(shop_requests_total{app="$TARGET"}[2m])) > 0) * 100`,
-		CPUUtilization:    `avg(rate(container_cpu_usage_seconds_total{pod=~"$TARGET-.*"}[2m])) * 100`,
+		LatencyP99:        latQ,
+		ErrorRate:         errQ,
+		CPUUtilization:    cpuQ,
 		RequestsPerSecond: `sum(rate(shop_requests_total{app="$TARGET"}[2m]))`,
 	})
 	if err != nil {

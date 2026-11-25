@@ -50,7 +50,7 @@ func baseSpec() v1alpha1.AgenticAutoscalerSpec {
 // scaleUp builds a scale-up ScaleDecision to the given target.
 func scaleUp(target int32) reasoning.ScaleDecision {
 	return reasoning.ScaleDecision{
-		Action:         "scale-up",
+		Action:         actionScaleUp,
 		TargetReplicas: target,
 		Confidence:     0.9,
 		Reason:         "test",
@@ -69,7 +69,7 @@ func scaleDown(target int32) reasoning.ScaleDecision {
 
 // holdDecision returns a hold ScaleDecision (no target replicas).
 func holdDecision() reasoning.ScaleDecision {
-	return reasoning.ScaleDecision{Action: "hold", Reason: "test"}
+	return reasoning.ScaleDecision{Action: reasoning.ActionHold, Reason: "test"}
 }
 
 // newEnforcerWithClock returns an Enforcer whose clock is fixed at now.
@@ -97,8 +97,8 @@ func TestEnforcer_DecisionWithinBounds_PassesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enforce: %v", err)
 	}
-	if got.Action != "scale-up" {
-		t.Errorf("Action: want %q, got %q", "scale-up", got.Action)
+	if got.Action != actionScaleUp {
+		t.Errorf("Action: want %q, got %q", actionScaleUp, got.Action)
 	}
 	if got.TargetReplicas != 8 {
 		t.Errorf("TargetReplicas: want 8, got %d", got.TargetReplicas)
@@ -116,8 +116,8 @@ func TestEnforcer_DecisionAboveMaxReplicas_ClampsToMax(t *testing.T) {
 	if got.TargetReplicas != 20 {
 		t.Errorf("TargetReplicas: want 20 (clamped to max), got %d", got.TargetReplicas)
 	}
-	if got.Action != "scale-up" {
-		t.Errorf("Action: want %q (preserved), got %q", "scale-up", got.Action)
+	if got.Action != actionScaleUp {
+		t.Errorf("Action: want %q (preserved), got %q", actionScaleUp, got.Action)
 	}
 }
 
@@ -147,8 +147,8 @@ func TestEnforcer_HoldDecision_PassesThroughUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enforce: %v", err)
 	}
-	if got.Action != "hold" {
-		t.Errorf("Action: want %q, got %q", "hold", got.Action)
+	if got.Action != reasoning.ActionHold {
+		t.Errorf("Action: want %q, got %q", reasoning.ActionHold, got.Action)
 	}
 }
 
@@ -164,8 +164,8 @@ func TestEnforcer_WithinCooldownWindow_ReturnsHold(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enforce: %v", err)
 	}
-	if got.Action != "hold" {
-		t.Errorf("Action: want %q (cooldown hold), got %q", "hold", got.Action)
+	if got.Action != reasoning.ActionHold {
+		t.Errorf("Action: want %q (cooldown hold), got %q", reasoning.ActionHold, got.Action)
 	}
 }
 
@@ -179,8 +179,8 @@ func TestEnforcer_CooldownExpired_DecisionPassesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enforce: %v", err)
 	}
-	if got.Action != "scale-up" {
-		t.Errorf("Action: want %q, got %q", "scale-up", got.Action)
+	if got.Action != actionScaleUp {
+		t.Errorf("Action: want %q, got %q", actionScaleUp, got.Action)
 	}
 }
 
@@ -191,8 +191,8 @@ func TestEnforcer_NilLastScaleTime_NoCooldown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enforce: %v", err)
 	}
-	if got.Action != "scale-up" {
-		t.Errorf("Action: want %q (no cooldown on first scale), got %q", "scale-up", got.Action)
+	if got.Action != actionScaleUp {
+		t.Errorf("Action: want %q (no cooldown on first scale), got %q", actionScaleUp, got.Action)
 	}
 }
 
@@ -208,8 +208,8 @@ func TestEnforcer_ZeroCooldownSeconds_NeverBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enforce: %v", err)
 	}
-	if got.Action != "scale-up" {
-		t.Errorf("Action: want %q (zero cooldown should never block), got %q", "scale-up", got.Action)
+	if got.Action != actionScaleUp {
+		t.Errorf("Action: want %q (zero cooldown should never block), got %q", actionScaleUp, got.Action)
 	}
 }
 

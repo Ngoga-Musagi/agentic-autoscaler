@@ -37,7 +37,7 @@ func HoldDecision(reason string) ScaleDecision {
 // replica delta so on-call SREs can see the magnitude at a glance.
 func ScaleUpDecision(current, target int32, confidence float64, reason string) ScaleDecision {
 	return ScaleDecision{
-		Action:         "scale-up",
+		Action:         actionScaleUp,
 		TargetReplicas: target,
 		Confidence:     confidence,
 		Reason:         fmt.Sprintf("%s (replicas %d → %d)", reason, current, target),
@@ -49,7 +49,7 @@ func ScaleUpDecision(current, target int32, confidence float64, reason string) S
 // replicas from current to target.
 func ScaleDownDecision(current, target int32, confidence float64, reason string) ScaleDecision {
 	return ScaleDecision{
-		Action:         "scale-down",
+		Action:         actionScaleDown,
 		TargetReplicas: target,
 		Confidence:     confidence,
 		Reason:         fmt.Sprintf("%s (replicas %d → %d)", reason, current, target),

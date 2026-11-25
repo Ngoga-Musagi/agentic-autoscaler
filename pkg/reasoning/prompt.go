@@ -27,7 +27,8 @@ import (
 // SystemPrompt is the static system message sent to every AI provider.
 // It instructs the model to return ONLY raw JSON — no prose, no markdown,
 // no code fences — so the response can be parsed without stripping.
-const SystemPrompt = `You are a Kubernetes autoscaling agent. Your sole job is to analyze the system health signals provided and return a precise scaling decision.
+const SystemPrompt = "You are a Kubernetes autoscaling agent. " +
+	"Your sole job is to analyze the system health signals provided and return a precise scaling decision." + `
 
 Rules you must follow without exception:
 1. Respond ONLY with a single valid JSON object. No explanation, no markdown, no code blocks.
@@ -38,7 +39,9 @@ Rules you must follow without exception:
 6. "reason" must be a single sentence written for on-call SREs explaining the decision.
 
 Example of the only acceptable response format:
-{"action":"scale-up","targetReplicas":8,"confidence":0.9,"reason":"Connection pool exhausted with p99 latency at 2.4s indicates the current replica count cannot handle load."}`
+{"action":"scale-up","targetReplicas":8,"confidence":0.9,` +
+	`"reason":"Connection pool exhausted with p99 latency at 2.4s ` +
+	`indicates the current replica count cannot handle load."}`
 
 // userPromptTmpl is the dynamic portion of the prompt, rendered per reconcile cycle.
 var userPromptTmpl = template.Must(template.New("user").Parse(`Deployment: {{.TargetDeployment}}
@@ -65,7 +68,8 @@ Do not scale up at or above the token-budget cap.
 {{- end}}
 
 Respond with ONLY valid JSON. targetReplicas must be in [{{.MinReplicas}}, {{.MaxReplicas}}]:
-{"action":"scale-up|scale-down|hold","targetReplicas":N,"confidence":0.0-1.0,"reason":"one sentence for on-call SREs"}`))
+{"action":"scale-up|scale-down|hold","targetReplicas":N,` +
+	`"confidence":0.0-1.0,"reason":"one sentence for on-call SREs"}`))
 
 // promptData is the template context assembled from Config and FusedSignal.
 type promptData struct {

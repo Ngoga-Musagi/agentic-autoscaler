@@ -161,7 +161,7 @@ func (o *OllamaAgent) parseDecision(raw []byte) (ScaleDecision, error) {
 		Confidence:     ai.Confidence,
 		Reason:         ai.Reason,
 		Timestamp:      nowMetav1(),
-		Provider:       "ollama",
+		Provider:       providerOllama,
 	}, nil
 }
 
@@ -169,7 +169,7 @@ func (o *OllamaAgent) parseDecision(raw []byte) (ScaleDecision, error) {
 // replica counts, or confidence values outside [0, 1].
 func (o *OllamaAgent) validateDecision(d aiDecision) error {
 	switch d.Action {
-	case "scale-up", "scale-down", ActionHold:
+	case actionScaleUp, actionScaleDown, ActionHold:
 	default:
 		return fmt.Errorf("unknown action %q", d.Action)
 	}
